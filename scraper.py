@@ -9,8 +9,53 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 import os
 import json
+import requests
 from google.oauth2.service_account import Credentials
 import gspread
+
+
+def calculate_score(msrp, monthly, das, months):
+    """
+    Calculate a 0-100 score based on the 1% rule (0.8% = 100 score, 1.8% = 0 score).
+    """
+    try:
+        m_val = float(str(msrp).replace('$', '').replace(',', ''))
+        mo_val = float(str(monthly).replace('$', '').replace(',', ''))
+        das_val = float(str(das).replace('$', '').replace(',', ''))
+        mos_val = float(months)
+
+        effective_monthly = mo_val + (das_val / mos_val)
+        ratio = effective_monthly / m_val
+
+        score = 100 - ((ratio - 0.008) / 0.010) * 100
+        return max(0, min(100, round(score, 1)))  # Clamp between 0 and 100
+    except Exception:
+        return 0
+
+
+def send_telegram_alert(new_top_deals):
+    """
+    Send a Telegram alert when new deals make it into the Top 5.
+    """
+    token = os.environ.get("TELEGRAM_TOKEN")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    
+    if not token or not chat_id:
+        print("Telegram credentials not found. Skipping alert.")
+        return
+    
+    text = f"🚨 Leasehackr Alert: {len(new_top_deals)} New Top 5 Deals! 🚨\n\n"
+    for d in new_top_deals:
+        # d[12] is score, d[0] Make, d[1] Model, d[6] Monthly, d[7] DAS
+        text += f"🔥 Score: {d[12]}/100\n🚗 {d[0]} {d[1]}\n💰 ${d[6]}/mo (${d[7]} DAS)\n\n"
+        
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text}
+    try:
+        requests.post(url, json=payload)
+        print("Telegram alert sent successfully!")
+    except Exception as e:
+        print(f"Failed to send Telegram alert: {e}")
 
 scopes = ['https://www.googleapis.com/auth/spreadsheets']
 google_creds_json = os.environ.get('GOOGLE_CREDENTIALS')
@@ -123,11 +168,18 @@ for card in deal_cards:
         print(f"Error processing card: {e}")
         continue
 
-# Convert list of dictionaries to list of lists
-# Order must match: ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %']
-column_order = ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %']
+# Convert list of dictionaries to list of lists with Score as the 13th column
+# Order must match: ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %', 'Score']
+column_order = ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %', 'Score']
 
-list_of_lists = [[deal.get(col, '') for col in column_order] for deal in deals]
+# Build list_of_lists with score as 13th column
+list_of_lists = []
+for deal in deals:
+    row = [deal.get(col, '') for col in column_order[:-1]]  # All columns except Score
+    # Calculate score: MSRP (index 2), Monthly Payment (index 6), DAS (index 7), Months (index 4)
+    score = calculate_score(deal.get('MSRP', ''), deal.get('Monthly Payment', ''), deal.get('Due at Signing', ''), deal.get('Months', ''))
+    row.append(score)  # Add score as 13th column
+    list_of_lists.append(row)
 
 # Print first 3 deals for verification
 print("\n=== First 3 Extracted Deals ===\n")
@@ -149,7 +201,65 @@ for deal in list_of_lists:
         new_deals.append(deal)
         seen_deals.add(signature)  # Add to set to prevent duplicates within the same daily scrape
 
-# 4. Append only the new deals
+# 4. Evaluate Top 5 and send Telegram alert if new deals make the cut
+# Combine existing rows (with dynamically calculated scores) and new deals
+all_deals_for_scoring = []
+
+# Add existing rows with dynamically calculated scores
+if len(existing_rows) > 1:  # If the sheet has more than just headers
+    for row in existing_rows[1:]:
+        if len(row) >= 7:
+            # For older rows without the 13th column, calculate score on the fly
+            if len(row) >= 12:
+                # Row has at least 12 columns, calculate score: MSRP (2), Monthly (6), DAS (7), Months (4)
+                score = calculate_score(row[2] if len(row) > 2 else '', 
+                                       row[6] if len(row) > 6 else '', 
+                                       row[7] if len(row) > 7 else '', 
+                                       row[4] if len(row) > 4 else '')
+            else:
+                score = 0
+            # Pad the row to 13 columns if needed
+            row_list = list(row)
+            while len(row_list) < 13:
+                row_list.append('')
+            row_list.append(score)
+            all_deals_for_scoring.append(row_list)
+
+# Add new deals
+for deal in new_deals:
+    deal_list = list(deal)
+    while len(deal_list) < 13:
+        deal_list.append('')
+    all_deals_for_scoring.append(deal_list)
+
+# Sort by score (index 12) descending
+all_deals_for_scoring.sort(key=lambda x: float(x[12]) if x[12] else 0, reverse=True)
+
+# Get top 5
+top_5 = all_deals_for_scoring[:5]
+
+print("\n=== Current Top 5 Deals ===\n")
+for i, deal in enumerate(top_5, 1):
+    print(f"{i}. Score: {deal[12]}/100 - {deal[0]} {deal[1]} - ${deal[6]}/mo")
+
+# Find new deals that are in the top 5
+new_deals_signatures = set()
+for deal in new_deals:
+    sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
+    new_deals_signatures.add(sig)
+
+new_top_deals = []
+for deal in top_5:
+    sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
+    if sig in new_deals_signatures:
+        new_top_deals.append(deal)
+
+# Send Telegram alert if new deals made it to top 5
+if new_top_deals:
+    print(f"\n{len(new_top_deals)} new deal(s) made it to Top 5!")
+    send_telegram_alert(new_top_deals)
+
+# 5. Append only the new deals
 if new_deals:
     print(f"Appending {len(new_deals)} NEW deals to Google Sheets...")
     worksheet.append_rows(new_deals)
