@@ -1,0 +1,27 @@
+name: Daily Leasehackr Scraper
+on:
+  schedule:
+    # Runs at 8:00 AM UTC (3:00 AM EST) every day
+    - cron: '0 8 * * *'
+  workflow_dispatch: # Allows manual triggering from the GitHub UI
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    - name: Install Scrapling Browsers
+      run: scrapling install
+    - name: Run Scraper
+      env:
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+      run: python scraper.py
