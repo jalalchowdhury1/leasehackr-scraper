@@ -57,6 +57,10 @@ def send_telegram_alert(new_top_deals):
     except Exception as e:
         print(f"Failed to send Telegram alert: {e}")
 
+
+# ============================================================
+# Google Sheets Setup
+# ============================================================
 scopes = ['https://www.googleapis.com/auth/spreadsheets']
 google_creds_json = os.environ.get('GOOGLE_CREDENTIALS')
 if google_creds_json:
@@ -77,22 +81,53 @@ spreadsheet = client.open_by_key('1rmvpKHIIc_1QIZbPE7rFSdEeYFqVsH28-O5Fp_UM_ok')
 worksheet = spreadsheet.sheet1
 
 # ============================================================
-# 1. Fetch existing data from the sheet
+# 1. Define Headers explicitly with 13th column (Score)
+# ============================================================
+headers = ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %', 'Score']
+
+# ============================================================
+# 2. Fetch existing data from the sheet
 # ============================================================
 existing_rows = worksheet.get_all_values()
 
-# 2. Create a set of unique deal signatures to track what's already in the sheet
-# Signature consists of: (Make, Model, MSRP, Monthly Payment)
-seen_deals = set()
+print(f"Found {len(existing_rows)} rows in the Google Sheet (including header)")
+
+# ============================================================
+# 3. Process Existing Rows - ensure every row has 13 columns
+# ============================================================
+updated_existing_rows = []
+
 if len(existing_rows) > 1:  # If the sheet has more than just headers
     for row in existing_rows[1:]:
-        if len(row) >= 7:  # Ensure row has enough columns
-            signature = (str(row[0]).strip(), str(row[1]).strip(), str(row[2]).strip(), str(row[6]).strip())
-            seen_deals.add(signature)
+        row_list = list(row)
+        
+        # If a row has fewer than 13 columns (missing the score), calculate and append it
+        if len(row_list) < 13:
+            # Calculate score using MSRP (index 2), Monthly (index 6), DAS (index 7), Months (index 4)
+            score = calculate_score(
+                row_list[2] if len(row_list) > 2 else '',
+                row_list[6] if len(row_list) > 6 else '',
+                row_list[7] if len(row_list) > 7 else '',
+                row_list[4] if len(row_list) > 4 else ''
+            )
+            row_list.append(score)
+        
+        # Ensure row has exactly 13 elements
+        while len(row_list) < 13:
+            row_list.append('')
+        
+        # Truncate if more than 13 (shouldn't happen but just in case)
+        row_list = row_list[:13]
+        
+        # Make sure score is at index 12
+        if len(row_list) == 13:
+            updated_existing_rows.append(row_list)
 
-print(f"Found {len(seen_deals)} existing deals in the Google Sheet")
+print(f"Processed {len(updated_existing_rows)} existing rows with Score column")
 
-# Fetch the live page
+# ============================================================
+# 4. Fetch the live page and scrape deals
+# ============================================================
 print("Fetching https://pnd.leasehackr.com/ ...")
 fetcher = StealthyFetcher()
 page = fetcher.fetch('https://pnd.leasehackr.com/', network_idle=True)
@@ -168,7 +203,9 @@ for card in deal_cards:
         print(f"Error processing card: {e}")
         continue
 
-# Convert list of dictionaries to list of lists with Score as the 13th column
+# ============================================================
+# 5. Process New Deals - format as 13-element list with Score
+# ============================================================
 # Order must match: ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %', 'Score']
 column_order = ['Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year', 'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor', 'Interest Rate %', 'Residual %', 'Score']
 
@@ -179,19 +216,30 @@ for deal in deals:
     # Calculate score: MSRP (index 2), Monthly Payment (index 6), DAS (index 7), Months (index 4)
     score = calculate_score(deal.get('MSRP', ''), deal.get('Monthly Payment', ''), deal.get('Due at Signing', ''), deal.get('Months', ''))
     row.append(score)  # Add score as 13th column
+    
+    # Ensure exactly 13 elements
+    while len(row) < 13:
+        row.append('')
+    row = row[:13]
+    
     list_of_lists.append(row)
 
 # Print first 3 deals for verification
 print("\n=== First 3 Extracted Deals ===\n")
-for i, deal in enumerate(deals[:3], 1):
-    print(f"Deal {i}:")
-    for key, value in deal.items():
-        print(f"  {key}: {value}")
-    print()
+for i, deal in enumerate(list_of_lists[:3], 1):
+    print(f"Deal {i}: {deal[0]} {deal[1]} - Score: {deal[12]}")
 
 # ============================================================
-# 3. Filter our newly scraped list_of_lists to remove duplicates
+# 6. Filter new deals to remove duplicates from existing sheet
 # ============================================================
+# Create a set of signatures from existing rows
+seen_deals = set()
+for row in updated_existing_rows:
+    if len(row) >= 7:
+        signature = (str(row[0]).strip(), str(row[1]).strip(), str(row[2]).strip(), str(row[6]).strip())
+        seen_deals.add(signature)
+
+# Filter new deals
 new_deals = []
 for deal in list_of_lists:
     # deal[0]=Make, deal[1]=Model, deal[2]=MSRP, deal[6]=Monthly Payment
@@ -199,70 +247,76 @@ for deal in list_of_lists:
     
     if signature not in seen_deals:
         new_deals.append(deal)
-        seen_deals.add(signature)  # Add to set to prevent duplicates within the same daily scrape
+        seen_deals.add(signature)
 
-# 4. Evaluate Top 5 and send Telegram alert if new deals make the cut
-# Combine existing rows (with dynamically calculated scores) and new deals
-all_deals_for_scoring = []
+print(f"\nFound {len(new_deals)} NEW deals out of {len(list_of_lists)} scraped")
 
-# Add existing rows with dynamically calculated scores
-if len(existing_rows) > 1:  # If the sheet has more than just headers
-    for row in existing_rows[1:]:
-        if len(row) >= 7:
-            # For older rows without the 13th column, calculate score on the fly
-            if len(row) >= 12:
-                # Row has at least 12 columns, calculate score: MSRP (2), Monthly (6), DAS (7), Months (4)
-                score = calculate_score(row[2] if len(row) > 2 else '', 
-                                       row[6] if len(row) > 6 else '', 
-                                       row[7] if len(row) > 7 else '', 
-                                       row[4] if len(row) > 4 else '')
-            else:
-                score = 0
-            # Pad the row to 13 columns if needed
-            row_list = list(row)
-            while len(row_list) < 13:
-                row_list.append('')
-            row_list.append(score)
-            all_deals_for_scoring.append(row_list)
+# ============================================================
+# 7. Combine all deals, deduplicate, and sort by Score
+# ============================================================
+# Create a combined list of all deals (existing + new)
+all_deals = []
 
-# Add new deals
+# Add existing rows
+for row in updated_existing_rows:
+    all_deals.append(row)
+
+# Add new deals (they're already deduplicated against existing)
 for deal in new_deals:
-    deal_list = list(deal)
-    while len(deal_list) < 13:
-        deal_list.append('')
-    all_deals_for_scoring.append(deal_list)
+    all_deals.append(deal)
 
-# Sort by score (index 12) descending
-all_deals_for_scoring.sort(key=lambda x: float(x[12]) if x[12] else 0, reverse=True)
+# Deduplicate based on signature
+seen_signatures = set()
+deduplicated_all_deals = []
+for deal in all_deals:
+    signature = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
+    if signature not in seen_signatures:
+        seen_signatures.add(signature)
+        deduplicated_all_deals.append(deal)
 
-# Get top 5
-top_5 = all_deals_for_scoring[:5]
+# Sort by Score (index 12) descending
+deduplicated_all_deals.sort(key=lambda x: float(x[12]) if x[12] else 0, reverse=True)
+
+all_deals = deduplicated_all_deals
+
+print(f"Total unique deals after combine/dedup/sort: {len(all_deals)}")
+
+# ============================================================
+# 8. Top 5 Telegram Logic
+# ============================================================
+# Grab the first 5 elements from the sorted all_deals
+top_5 = all_deals[:5]
 
 print("\n=== Current Top 5 Deals ===\n")
 for i, deal in enumerate(top_5, 1):
     print(f"{i}. Score: {deal[12]}/100 - {deal[0]} {deal[1]} - ${deal[6]}/mo")
 
-# Find new deals that are in the top 5
+# Create set of signatures from new_deals for comparison
 new_deals_signatures = set()
 for deal in new_deals:
     sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
     new_deals_signatures.add(sig)
 
-new_top_deals = []
+# Check if any top 5 deals match new_deals
+top_new_deals = []
 for deal in top_5:
     sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
     if sig in new_deals_signatures:
-        new_top_deals.append(deal)
+        top_new_deals.append(deal)
 
 # Send Telegram alert if new deals made it to top 5
-if new_top_deals:
-    print(f"\n{len(new_top_deals)} new deal(s) made it to Top 5!")
-    send_telegram_alert(new_top_deals)
+if top_new_deals:
+    print(f"\n{len(top_new_deals)} new deal(s) made it to Top 5!")
+    send_telegram_alert(top_new_deals)
 
-# 5. Append only the new deals
-if new_deals:
-    print(f"Appending {len(new_deals)} NEW deals to Google Sheets...")
-    worksheet.append_rows(new_deals)
-    print(f"Successfully appended {len(new_deals)} NEW deals to Google Sheets!")
-else:
-    print("No new deals found today. The Google Sheet is already up to date!")
+# ============================================================
+# 9. Rewrite the Sheet - Clear and Write Sorted Data
+# ============================================================
+print("\nRewriting Google Sheet with sorted deals...")
+worksheet.clear()
+worksheet.append_row(headers)
+
+if all_deals:
+    worksheet.append_rows(all_deals)
+    
+print(f"Successfully refreshed the dashboard with {len(all_deals)} sorted deals!")
