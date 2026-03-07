@@ -31,6 +31,22 @@ print("Loading credentials and connecting to Google Sheets...")
 spreadsheet = client.open_by_key('1rmvpKHIIc_1QIZbPE7rFSdEeYFqVsH28-O5Fp_UM_ok')
 worksheet = spreadsheet.sheet1
 
+# ============================================================
+# 1. Fetch existing data from the sheet
+# ============================================================
+existing_rows = worksheet.get_all_values()
+
+# 2. Create a set of unique deal signatures to track what's already in the sheet
+# Signature consists of: (Make, Model, MSRP, Monthly Payment)
+seen_deals = set()
+if len(existing_rows) > 1:  # If the sheet has more than just headers
+    for row in existing_rows[1:]:
+        if len(row) >= 7:  # Ensure row has enough columns
+            signature = (str(row[0]).strip(), str(row[1]).strip(), str(row[2]).strip(), str(row[6]).strip())
+            seen_deals.add(signature)
+
+print(f"Found {len(seen_deals)} existing deals in the Google Sheet")
+
 # Fetch the live page
 print("Fetching https://pnd.leasehackr.com/ ...")
 fetcher = StealthyFetcher()
@@ -121,8 +137,22 @@ for i, deal in enumerate(deals[:3], 1):
         print(f"  {key}: {value}")
     print()
 
-# Append to Google Sheets
-print("Appending data to Google Sheets...")
-worksheet.append_rows(list_of_lists)
+# ============================================================
+# 3. Filter our newly scraped list_of_lists to remove duplicates
+# ============================================================
+new_deals = []
+for deal in list_of_lists:
+    # deal[0]=Make, deal[1]=Model, deal[2]=MSRP, deal[6]=Monthly Payment
+    signature = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
+    
+    if signature not in seen_deals:
+        new_deals.append(deal)
+        seen_deals.add(signature)  # Add to set to prevent duplicates within the same daily scrape
 
-print(f"Successfully appended {len(list_of_lists)} deals to Google Sheets!")
+# 4. Append only the new deals
+if new_deals:
+    print(f"Appending {len(new_deals)} NEW deals to Google Sheets...")
+    worksheet.append_rows(new_deals)
+    print(f"Successfully appended {len(new_deals)} NEW deals to Google Sheets!")
+else:
+    print("No new deals found today. The Google Sheet is already up to date!")
