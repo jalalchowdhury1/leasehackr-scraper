@@ -1,5 +1,7 @@
-scrapling[all]
-gspread
-google-auth
-beautifulsoup4
-requests
+scrapling[all]==2.2.0
+gspread==5.12.0
+google-auth==2.35.0
+beautifulsoup4==4.12.3
+requests==2.32.3
+lxml==5.2.2
+certifi==2024.6.2

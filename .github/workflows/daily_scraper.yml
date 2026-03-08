@@ -7,6 +7,7 @@ on:
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -15,6 +16,21 @@ jobs:
       with:
         python-version: '3.9'
         cache: 'pip'
+    - name: Validate required secrets
+      run: |
+        if [ -z "${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+          echo "Error: GOOGLE_CREDENTIALS secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.TELEGRAM_TOKEN }}" ]; then
+          echo "Error: TELEGRAM_TOKEN secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+          echo "Error: TELEGRAM_CHAT_ID secret is not set"
+          exit 1
+        fi
+        echo "All required secrets are present"
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
