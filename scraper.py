@@ -114,7 +114,7 @@ def send_telegram_alert(new_top_deals: list) -> None:
         print(f"Failed to send Telegram alert: {e}")
 
 
-def get_google_client() -> gspread.GSpread:
+def get_google_client() -> gspread.Client:
     """
     Initialize and return the Google Sheets client.
     """
