@@ -1,8 +1,8 @@
 name: Daily Leasehackr Scraper
 on:
   schedule:
-    # Runs at 8:00 AM UTC (3:00 AM EST) every day
-    - cron: '0 8 * * *'
+    # Runs at 7:06 AM UTC (3:06 AM EDT / 2:06 AM EST) every day
+    - cron: '6 7 * * *'
   workflow_dispatch: # Allows manual triggering from the GitHub UI
 jobs:
   scrape:
@@ -18,6 +18,10 @@ jobs:
         cache: 'pip'
     - name: Validate required secrets
       run: |
+        if [ -z "${{ secrets.SPREADSHEET_ID }}" ]; then
+          echo "Error: SPREADSHEET_ID secret is not set"
+          exit 1
+        fi
         if [ -z "${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
           echo "Error: GOOGLE_CREDENTIALS secret is not set"
           exit 1
