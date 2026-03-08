@@ -345,11 +345,8 @@ def get_top_5(all_deals: list) -> list:
 
 
 def get_top_new_deals(top_5: list, new_deals: list) -> list:
-    """Find which of the top 5 are new deals."""
-    new_deals_signatures = set()
-    for deal in new_deals:
-        new_deals_signatures.add(deal.signature)
-
+    """Find which of the top 5 are truly new deals and return them as LeaseDeal objects."""
+    new_deals_map = {deal.signature: deal for deal in new_deals}
     top_new_deals = []
     for deal in top_5:
         if hasattr(deal, 'signature'):
@@ -357,9 +354,8 @@ def get_top_new_deals(top_5: list, new_deals: list) -> list:
         else:
             sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
         
-        if sig in new_deals_signatures:
-            top_new_deals.append(deal)
-
+        if sig in new_deals_map:
+            top_new_deals.append(new_deals_map[sig])  # Append the actual LeaseDeal object
     return top_new_deals
 
 
@@ -419,7 +415,7 @@ def main():
         print(f"{i}. Score: {score}/100 - {make} {model} - ${monthly}/mo")
 
     # Check if any top 5 deals match new_deals
-    top_new_deals = get_top_new_deals(top_5, scraped_deals)
+    top_new_deals = get_top_new_deals(top_5, new_deals)
 
     # Send Telegram alert if new deals made it to top 5
     if top_new_deals:
