@@ -102,7 +102,9 @@ def send_telegram_alert(new_top_deals: list) -> None:
         text += (
             f"🔥 Score: {deal.score}/100\n"
             f"🚗 {deal.make} {deal.model}\n"
-            f"💰 ${deal.monthly_payment}/mo (${deal.due_at_signing} DAS)\n\n"
+            f"💰 ${deal.monthly_payment}/mo (${deal.due_at_signing} DAS)\n"
+            f"🏷️ MSRP: {deal.msrp} | Term: {deal.months} mo\n"
+            f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
         
     url = f"https://api.telegram.org/bot{token}/sendMessage"
