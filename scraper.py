@@ -400,11 +400,11 @@ def main():
         print(f"Deal {i}: {deal.make} {deal.model} - Score: {deal.score}")
 
     # Filter new deals to remove duplicates from existing sheet
-    new_deals = filter_new_deals(list_of_lists, existing_rows)
-    print(f"\nFound {len(new_deals)} NEW deals out of {len(list_of_lists)} scraped")
+    new_deals = filter_new_deals(scraped_deals, existing_rows)
+    print(f"\nFound {len(new_deals)} NEW deals out of {len(scraped_deals)} scraped")
 
     # Combine all deals, deduplicate, and sort by Score
-    all_deals = combine_and_deduplicate(existing_rows, scraped_deals)
+    all_deals = combine_and_deduplicate(existing_rows, new_deals)
     print(f"Total unique deals after combine/dedup/sort: {len(all_deals)}")
 
     # Get Top 5 deals
