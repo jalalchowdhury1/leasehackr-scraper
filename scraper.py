@@ -262,7 +262,8 @@ def scrape_deals() -> list:
     """
     print("Fetching https://pnd.leasehackr.com/ ...")
     fetcher = StealthyFetcher()
-    page = fetcher.fetch('https://pnd.leasehackr.com/', network_idle=True)
+    # Use 60 seconds timeout and wait for the specific 'deal_card' class to appear instead of network idle
+    page = fetcher.fetch('https://pnd.leasehackr.com/', wait_selector='.deal_card', timeout=60000)
 
     # Parse the HTML
     html_content = page.html_content
