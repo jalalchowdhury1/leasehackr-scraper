@@ -1,8 +1,8 @@
 name: Historical Scraper
 on:
   schedule:
-    # Runs at 12:00 AM UTC every Sunday (8:00 PM EDT Saturday)
-    - cron: '0 0 * * 0'
+    # Runs at 7:04 AM UTC (3:04 AM EDT / 2:04 AM EST) every day
+    - cron: '4 7 * * *'
   workflow_dispatch: # Allows manual triggering from the GitHub UI
 jobs:
   historical:
