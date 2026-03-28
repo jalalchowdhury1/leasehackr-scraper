@@ -57,6 +57,7 @@ jobs:
     name: Daily Sheet (scraper_daily.py)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: historical
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
@@ -90,6 +91,8 @@ jobs:
         pip install -r requirements.txt
     - name: Install Scrapling Browsers
       run: scrapling install
+    - name: Sleep 5 minutes before running daily scraper
+      run: sleep 300
     - name: Run Daily Scraper
       env:
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
