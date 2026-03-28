@@ -26,6 +26,13 @@ import scraper
 DAILY_SHEET_NAME = os.environ.get("SHEET2_NAME", "Daily")   # Tab name in Google Sheets
 TELEGRAM_ALERT_THRESHOLD = 98.0   # Only alert if deal score >= 98
 
+# ── Column headers (must match what's already in your Daily sheet tab) ────────
+HEADERS = [
+    'Make', 'Model', 'MSRP', 'Sales Price', 'Months', 'Miles/Year',
+    'Monthly Payment', 'Due at Signing', 'Sales Tax', 'Money Factor',
+    'Interest Rate %', 'Residual %', 'Score'
+]
+
 
 def get_daily_worksheet(client: gspread.Client, spreadsheet_id: str):
     """
@@ -55,13 +62,12 @@ def clear_sheet_keep_headers(worksheet) -> None:
     gspread's clear() wipes everything, so we fetch, keep headers, clear, then re-write headers.
     """
     all_values = worksheet.get_all_values()
-    if not all_values:
-        return
-
-    headers = all_values[0]  # Keep the header row
     worksheet.clear()
-    worksheet.append_row(headers)
-    print(f"Cleared data rows. Header row preserved: {headers}")
+    worksheet.append_row(HEADERS)
+    if all_values and len(all_values) > 1:
+        print(f"Cleared {len(all_values) - 1} previous data rows. Headers written: {HEADERS}")
+    else:
+        print(f"Sheet ready. Headers written: {HEADERS}")
 
 
 def filter_hot_deals(deals: list, threshold: float = TELEGRAM_ALERT_THRESHOLD) -> list:
