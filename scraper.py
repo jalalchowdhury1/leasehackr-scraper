@@ -134,6 +134,11 @@ def get_google_client() -> gspread.Client:
     return gspread.authorize(creds)
 
 
+# ── Sheet names ─────────────────────────────────────────────────────────────
+# Historical deals → sheet1 (the first/default tab, named "Historical")
+# Daily deals     → "Daily" tab (see scraper_daily.py)
+
+
 def get_spreadsheet_id() -> str:
     """
     Get the Google Spreadsheet ID from environment variable.

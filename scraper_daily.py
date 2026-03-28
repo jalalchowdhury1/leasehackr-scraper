@@ -23,7 +23,7 @@ from urllib.parse import urlparse, parse_qs
 import scraper
 
 # ── Constants ────────────────────────────────────────────────────────────────
-DAILY_SHEET_NAME = os.environ.get("SHEET2_NAME", "Daily")   # Tab name in Google Sheets
+DAILY_SHEET_NAME = "Daily"   # Google Sheets tab name for today's deals
 TELEGRAM_ALERT_THRESHOLD = 98.0   # Only alert if deal score >= 98
 
 # ── Column headers (must match what's already in your Daily sheet tab) ────────
