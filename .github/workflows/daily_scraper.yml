@@ -1,11 +1,14 @@
-name: Daily Leasehackr Scraper
+name: Leasehackr Scraper
 on:
   schedule:
-    # Runs at 7:06 AM UTC (3:06 AM EDT / 2:06 AM EST) every day
+    # Historical sheet: runs at 7:06 AM UTC (3:06 AM EDT / 2:06 AM EST) every day
     - cron: '6 7 * * *'
   workflow_dispatch: # Allows manual triggering from the GitHub UI
 jobs:
-  scrape:
+
+  # ── Historical Sheet ────────────────────────────────────────────────
+  historical:
+    name: Historical Sheet (scraper.py)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -41,10 +44,57 @@ jobs:
         pip install -r requirements.txt
     - name: Install Scrapling Browsers
       run: scrapling install
-    - name: Run Scraper
+    - name: Run Historical Scraper
       env:
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       run: python scraper.py
+
+  # ── Daily Sheet ─────────────────────────────────────────────────────
+  daily:
+    name: Daily Sheet (scraper_daily.py)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        cache: 'pip'
+    - name: Validate required secrets
+      run: |
+        if [ -z "${{ secrets.SPREADSHEET_ID }}" ]; then
+          echo "Error: SPREADSHEET_ID secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.GOOGLE_CREDENTIALS }}" ]; then
+          echo "Error: GOOGLE_CREDENTIALS secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.TELEGRAM_TOKEN }}" ]; then
+          echo "Error: TELEGRAM_TOKEN secret is not set"
+          exit 1
+        fi
+        if [ -z "${{ secrets.TELEGRAM_CHAT_ID }}" ]; then
+          echo "Error: TELEGRAM_CHAT_ID secret is not set"
+          exit 1
+        fi
+        echo "All required secrets are present"
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    - name: Install Scrapling Browsers
+      run: scrapling install
+    - name: Run Daily Scraper
+      env:
+        SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+        GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+        TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+        TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        SHEET2_NAME: ${{ secrets.SHEET2_NAME || 'Daily' }}
+      run: python scraper_daily.py
