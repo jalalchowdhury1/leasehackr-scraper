@@ -17,6 +17,11 @@ import gspread
 from urllib.parse import urlparse, parse_qs
 
 
+# Telegram alert fires only for brand-new deals (first time seen) scoring at or
+# above this value. Mirrors scraper_daily.py so both scrapers use the same bar.
+TELEGRAM_ALERT_THRESHOLD = 98.0
+
+
 @dataclass
 class LeaseDeal:
     """Dataclass representing a lease deal with named properties."""
@@ -86,19 +91,19 @@ def calculate_score(msrp: str, monthly: str, das: str, months: str) -> float:
         return 0
 
 
-def send_telegram_alert(new_top_deals: list) -> None:
+def send_telegram_alert(hot_deals: list) -> None:
     """
-    Send a Telegram alert when new deals make it into the Top 5.
+    Send a Telegram alert for brand-new deals scoring >= TELEGRAM_ALERT_THRESHOLD.
     """
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    
+
     if not token or not chat_id:
         print("Telegram credentials not found. Skipping alert.")
         return
-    
-    text = f"🚨 Leasehackr Alert: {len(new_top_deals)} New Top 5 Deals! 🚨\n\n"
-    for deal in new_top_deals:
+
+    text = f"🆕 Leasehackr: {len(hot_deals)} New Deal(s) Scoring ≥ {TELEGRAM_ALERT_THRESHOLD}! 🆕\n\n"
+    for deal in hot_deals:
         text += (
             f"🔥 Score: {deal.score}/100\n"
             f"🚗 {deal.make} {deal.model}\n"
@@ -309,6 +314,11 @@ def filter_new_deals(all_deals: list, existing_rows: list) -> list:
     return new_deals
 
 
+def filter_hot_deals(new_deals: list, threshold: float = TELEGRAM_ALERT_THRESHOLD) -> list:
+    """Return brand-new deals scoring at or above the alert threshold."""
+    return [deal for deal in new_deals if deal.score >= threshold]
+
+
 def combine_and_deduplicate(existing_rows: list, new_deals: list) -> list:
     """
     Combine existing rows and new deals, deduplicate, and sort by Score.
@@ -350,21 +360,6 @@ def combine_and_deduplicate(existing_rows: list, new_deals: list) -> list:
 def get_top_5(all_deals: list) -> list:
     """Get the top 5 deals from the sorted list."""
     return all_deals[:5]
-
-
-def get_top_new_deals(top_5: list, new_deals: list) -> list:
-    """Find which of the top 5 are truly new deals and return them as LeaseDeal objects."""
-    new_deals_map = {deal.signature: deal for deal in new_deals}
-    top_new_deals = []
-    for deal in top_5:
-        if hasattr(deal, 'signature'):
-            sig = deal.signature
-        else:
-            sig = (str(deal[0]).strip(), str(deal[1]).strip(), str(deal[2]).strip(), str(deal[6]).strip())
-        
-        if sig in new_deals_map:
-            top_new_deals.append(new_deals_map[sig])  # Append the actual LeaseDeal object
-    return top_new_deals
 
 
 def main():
@@ -422,13 +417,13 @@ def main():
         monthly = deal[6] if hasattr(deal, '__getitem__') else deal.monthly_payment
         print(f"{i}. Score: {score}/100 - {make} {model} - ${monthly}/mo")
 
-    # Check if any top 5 deals match new_deals
-    top_new_deals = get_top_new_deals(top_5, new_deals)
-
-    # Send Telegram alert if new deals made it to top 5
-    if top_new_deals:
-        print(f"\n{len(top_new_deals)} new deal(s) made it to Top 5!")
-        send_telegram_alert(top_new_deals)
+    # Telegram alert: brand-new deals (first time seen) scoring >= threshold
+    hot_new_deals = filter_hot_deals(new_deals)
+    print(f"\n[Alert Check] {len(hot_new_deals)} new deal(s) scoring ≥ {TELEGRAM_ALERT_THRESHOLD}")
+    if hot_new_deals:
+        send_telegram_alert(hot_new_deals)
+    else:
+        print("  No new deals met the alert threshold — no Telegram message sent.")
 
     # Rewrite the Sheet - Clear and Write Sorted Data
     print("\nRewriting Google Sheet with sorted deals...")
