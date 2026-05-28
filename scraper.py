@@ -91,6 +91,17 @@ def calculate_score(msrp: str, monthly: str, das: str, months: str) -> float:
         return 0
 
 
+def _fmt_money(value) -> str:
+    """Format a money value as '$1,234'. Accepts bare numbers or $-prefixed strings."""
+    s = str(value).strip().lstrip("$").replace(",", "").strip()
+    if not s:
+        return "N/A"
+    try:
+        return f"${int(round(float(s))):,}"
+    except (ValueError, TypeError):
+        return f"${s}"
+
+
 def send_telegram_alert(hot_deals: list) -> None:
     """
     Send a Telegram alert for brand-new deals scoring >= TELEGRAM_ALERT_THRESHOLD.
@@ -107,8 +118,8 @@ def send_telegram_alert(hot_deals: list) -> None:
         text += (
             f"🔥 Score: {deal.score}/100\n"
             f"🚗 {deal.make} {deal.model}\n"
-            f"💰 ${deal.monthly_payment}/mo (${deal.due_at_signing} DAS)\n"
-            f"🏷️ MSRP: {deal.msrp} | Term: {deal.months} mo\n"
+            f"💰 {_fmt_money(deal.monthly_payment)}/mo ({_fmt_money(deal.due_at_signing)} DAS)\n"
+            f"🏷️ MSRP: {_fmt_money(deal.msrp)} | Term: {deal.months} mo\n"
             f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
         
