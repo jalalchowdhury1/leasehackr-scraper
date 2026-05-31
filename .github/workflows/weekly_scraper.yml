@@ -41,6 +41,11 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
     - name: Install Scrapling Browsers
+      # GITHUB_TOKEN lifts the Camoufox download's GitHub API rate limit from
+      # 60/hr (unauthenticated, shared-runner IP) to 1000/hr, preventing the
+      # intermittent "403 rate limit exceeded" failures on the releases API.
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: scrapling install
     - name: Run Historical Scraper
       env:
