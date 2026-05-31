@@ -11,9 +11,9 @@ jobs:
     timeout-minutes: 15
     steps:
     - name: Checkout repository
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: '3.9'
         cache: 'pip'
@@ -39,14 +39,24 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install --retries 5 --timeout 60 -r requirements.txt
     - name: Install Scrapling Browsers
-      # GITHUB_TOKEN lifts the Camoufox download's GitHub API rate limit from
-      # 60/hr (unauthenticated, shared-runner IP) to 1000/hr, preventing the
-      # intermittent "403 rate limit exceeded" failures on the releases API.
+      # Camoufox is downloaded from the GitHub releases API. GITHUB_TOKEN lifts
+      # the rate limit from 60/hr (shared-runner IP) to 1000/hr; the retry loop
+      # absorbs transient network/5xx hiccups during the large browser download.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: scrapling install
+      run: |
+        for attempt in 1 2 3; do
+          echo "scrapling install — attempt $attempt/3"
+          if scrapling install; then
+            echo "Browsers installed successfully."
+            exit 0
+          fi
+          [ "$attempt" -lt 3 ] && { echo "Failed; retrying in 30s..."; sleep 30; }
+        done
+        echo "scrapling install failed after 3 attempts" >&2
+        exit 1
     - name: Sleep 5 minutes before running daily scraper
       run: sleep 300
     - name: Run Daily Scraper
