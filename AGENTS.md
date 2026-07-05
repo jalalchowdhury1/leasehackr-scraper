@@ -140,9 +140,16 @@ public — keep it that way.
 
 ### CI install nuances (already handled — don't "simplify" away)
 - Each scraper workflow runs `scrapling install` in a **3-attempt retry loop** with
-  `GITHUB_TOKEN` set in env. Camoufox is downloaded from the GitHub Releases API; the token
-  lifts the rate limit from 60/hr (shared-runner IP) to 1000/hr and dodges flaky **403
-  rate-limit** failures. Keep both the token and the retry loop.
+  `GITHUB_TOKEN` set in env. Camoufox is downloaded via the GitHub Releases API — but the
+  camoufox pip package (<=0.4.11) **ignores `GITHUB_TOKEN` and calls the API
+  unauthenticated** (plain `requests.get` in `camoufox/pkgman.py::GitHubDownloader.get_asset`),
+  so shared-runner IPs randomly hit the 60/hr anonymous limit → **403 rate limit exceeded**
+  (this killed the 2026-07-05 Daily run; setting the env var alone did NOT fix it). The
+  install step therefore **`sed`-patches that one line in site-packages** to send
+  `Authorization: Bearer $GITHUB_TOKEN` (1,000 req/hr dedicated quota) before running
+  `scrapling install`, and warns if the patch no longer applies (upstream code change —
+  re-derive the sed against the new `pkgman.py`). Keep the sed patch, the token, and the
+  retry loop.
 - `pip install` uses `--retries 5 --timeout 60` for the same flakiness reasons.
 - Both scraper jobs `timeout-minutes: 15`; both pin Python `3.9`.
 

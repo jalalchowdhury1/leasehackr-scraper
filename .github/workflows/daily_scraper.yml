@@ -41,12 +41,22 @@ jobs:
         python -m pip install --upgrade pip
         pip install --retries 5 --timeout 60 -r requirements.txt
     - name: Install Scrapling Browsers
-      # Camoufox is downloaded from the GitHub releases API. GITHUB_TOKEN lifts
-      # the rate limit from 60/hr (shared-runner IP) to 1000/hr; the retry loop
-      # absorbs transient network/5xx hiccups during the large browser download.
+      # Camoufox queries the GitHub releases API, but the camoufox pip package
+      # (<=0.4.11) sends that request UNAUTHENTICATED — it ignores GITHUB_TOKEN,
+      # so shared-runner IPs randomly 403 on the 60/hr anonymous rate limit
+      # (this killed the 2026-07-05 run). Patch the single API call in
+      # site-packages to send the token (1,000 req/hr dedicated quota). The
+      # retry loop absorbs transient network/5xx hiccups during the download.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
+        PKGMAN=$(python -c "import camoufox.pkgman as m; print(m.__file__)")
+        sed -i "s|requests.get(self.api_url, timeout=20)|requests.get(self.api_url, timeout=20, headers={'Authorization': 'Bearer ' + os.environ['GITHUB_TOKEN']} if os.environ.get('GITHUB_TOKEN') else None)|" "$PKGMAN"
+        if grep -q "Bearer" "$PKGMAN"; then
+          echo "camoufox GitHub API call patched to use GITHUB_TOKEN"
+        else
+          echo "::warning::camoufox auth patch did not apply (upstream code changed?) — install may hit anonymous rate limits"
+        fi
         for attempt in 1 2 3; do
           echo "scrapling install — attempt $attempt/3"
           if scrapling install; then
