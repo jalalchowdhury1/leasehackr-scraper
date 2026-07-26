@@ -13,7 +13,6 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 import requests
-from scrapling import StealthyFetcher
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 import gspread

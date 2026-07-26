@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Scraper script to extract lease deals from leasehackr.com and push to Google Sheets.
-Uses scrapling to fetch the page and gspread to write to Google Sheets.
+Fetches via fetcher.fetch_html() (requests → Lightpanda → scrapling fallback
+chain) and uses gspread to write to Google Sheets.
 """
 
 import os
@@ -10,8 +11,9 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 import requests
-from scrapling import StealthyFetcher
 from bs4 import BeautifulSoup
+
+from fetcher import fetch_html
 from google.oauth2.service_account import Credentials
 import gspread
 from urllib.parse import urlparse, parse_qs
@@ -282,12 +284,10 @@ def scrape_deals() -> list:
     Fetch the live page and scrape all deals.
     """
     print("Fetching https://pnd.leasehackr.com/ ...")
-    fetcher = StealthyFetcher()
-    # Use 60 seconds timeout and wait for the specific 'deal_card' class to appear instead of network idle
-    page = fetcher.fetch('https://pnd.leasehackr.com/', wait_selector='.deal_card', timeout=60000)
-
-    # Parse the HTML
-    html_content = page.html_content
+    # Tiered fetch: requests → Lightpanda → scrapling (see fetcher.py).
+    # Raises if every tier fails, so a broken fetch fails the workflow loudly
+    # instead of writing an empty sheet.
+    html_content = fetch_html()
     soup = BeautifulSoup(html_content, 'html.parser')
 
     # Find all deal cards

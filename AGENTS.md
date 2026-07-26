@@ -21,17 +21,28 @@ the same spreadsheet:
 |---|---|---|---|---|---|
 | `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | `4 7 * * *` (07:04 daily) | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
 | `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | `6 7 * * *` (07:06 daily) | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
+| `.github/workflows/tests.yml` | Tests | pytest | on push to main | n/a | Runs `tests/` (parser/score/fetcher; no network) |
 | `.github/workflows/keepalive.yml` | Keepalive | (inline shell) | `17 3 1,15 * *` (1st & 15th) | n/a (commits to repo) | Empty commit if repo idle ≥40 days, to stop GitHub auto-disabling the crons |
 
 > ⚠️ **Naming is misleading — verify against this table, not the filenames.**
 > `weekly_scraper.yml` is **not** weekly; it runs **daily** at 07:04 UTC and is the
 > *Historical* (cumulative) scraper. `daily_scraper.yml` runs daily at 07:06 UTC. Both run
-> every day, 2 minutes apart, plus the Daily one sleeps 5 minutes after install (see §5).
+> every day, 2 minutes apart.
 > The "weekly" filename is a historical artifact (git: "Fix: Historical scraper runs daily").
 
-**Stack:** Python 3.9 (CI pin) · [`scrapling`](https://pypi.org/project/scrapling/)
-`StealthyFetcher` (Camoufox headless browser) for fetching · BeautifulSoup4/lxml for
-parsing · `gspread` + `google-auth` for Sheets · `requests` for the Telegram API.
+**Stack:** Python 3.9 (CI pin) · plain `requests` GET for fetching (see the fetch
+chain below — the page is server-rendered; verified 2026-07-25) · BeautifulSoup4/lxml
+for parsing · `gspread` + `google-auth` for Sheets · `requests` for the Telegram API.
+
+> **2026-07-25 fetch redesign (Camoufox retired from the default path).** The site
+> needs no stealth browser: plain `requests` returns the full server-rendered page
+> (129 deals parsed identically to the browser fetch, no UA gating). Fetching now
+> lives in `fetcher.py` as a three-tier chain — **requests → Lightpanda (on-demand
+> static binary, covers future JS-rendering) → scrapling/Camoufox (only if
+> installed, covers future bot-blocking)** — and raises if all tiers fail instead
+> of writing an empty sheet. CI no longer installs any browser; scraper runs went
+> from ~10+ min to ~1 min. **Rollback:** branch `camoufox-backup` / tag
+> `v1-camoufox` hold the original implementation exactly as it was.
 
 ---
 
@@ -57,9 +68,22 @@ Both scrapers share one fetch+parse+score pipeline. `scraper_daily.py` **imports
 strategy and the alert trigger differ.
 
 ### The scrape itself (`scraper.scrape_deals`)
-- Fetches `https://pnd.leasehackr.com/` with `StealthyFetcher().fetch(...,
-  wait_selector='.deal_card', timeout=60000)` — it waits for `.deal_card` to appear (the
-  page is JS-rendered) rather than network-idle, with a 60s timeout.
+- Fetches `https://pnd.leasehackr.com/` via `fetcher.fetch_html()` — a three-tier
+  fallback chain, each tier validated by the presence of the literal `deal_card`
+  in the HTML (a fetched-but-empty/blocked/redesigned page falls through):
+  1. **`requests` GET** (3 attempts, 30s timeout, desktop Chrome UA) — the normal
+     path; the page is fully server-rendered.
+  2. **Lightpanda** ([lightpanda-io/browser](https://github.com/lightpanda-io/browser),
+     single static binary downloaded on demand from the nightly release into the
+     temp dir, cached across same-runner invocations; `LIGHTPANDA_BIN` env
+     overrides the path) — run as `fetch --dump html --wait-selector .deal_card`.
+     Covers the site ever becoming JS-rendered. Both tiers verified live
+     2026-07-25: 129/129 deals each.
+  3. **scrapling `StealthyFetcher`** (the original Camoufox path) — lazy import;
+     silently skipped unless `scrapling[all]` is installed (it is NOT in
+     `requirements.txt` any more). Covers the site ever adding bot detection.
+  - If **all** tiers fail, `fetch_html()` **raises** → the workflow fails loudly
+    (see §5.6 — this replaced the old "silently write an empty sheet" behaviour).
 - Parses the rendered HTML with BeautifulSoup, finds all `div.deal_card`, and for each card
   reads CSS-class fields: `.make_val .model_val .model_yr_val .trim_val .msrp_val
   .monthly_val .das_val .term_val .mileage_val` and the calculator link `.calc_val`.
@@ -106,8 +130,7 @@ dedup index math both depend on it:
 ## 4. Run it locally
 
 ```bash
-pip install -r requirements.txt
-scrapling install          # downloads the Camoufox browser (large; needed by StealthyFetcher)
+pip install -r requirements.txt      # no browser install needed any more
 
 # credentials: either drop a service-account file as credentials.json in the repo root,
 # or set GOOGLE_CREDENTIALS to the JSON string (CI uses the env var).
@@ -117,6 +140,8 @@ export TELEGRAM_CHAT_ID=...      # optional locally
 
 python scraper.py          # Historical (cumulative → sheet1)
 python scraper_daily.py    # Daily (snapshot → "Daily" tab)
+
+python -m pytest tests/ -q # 25 tests: parser (real-card fixture), score, fetch chain
 ```
 
 `inspect_structure.py` is a **debug-only** helper (not run by CI): point it at a saved HTML
@@ -138,30 +163,26 @@ at the top of each workflow before any scraping):
 **Never commit secret values.** `credentials.json` and `.env*` are git-ignored. The repo is
 public — keep it that way.
 
-### CI install nuances (already handled — don't "simplify" away)
-- Each scraper workflow runs `scrapling install` in a **3-attempt retry loop** with
-  `GITHUB_TOKEN` set in env. Camoufox is downloaded via the GitHub Releases API — but the
-  camoufox pip package (<=0.4.11) **ignores `GITHUB_TOKEN` and calls the API
-  unauthenticated** (plain `requests.get` in `camoufox/pkgman.py::GitHubDownloader.get_asset`),
-  so shared-runner IPs randomly hit the 60/hr anonymous limit → **403 rate limit exceeded**
-  (this killed the 2026-07-05 Daily run; setting the env var alone did NOT fix it). The
-  install step therefore **`sed`-patches that one line in site-packages** to send
-  `Authorization: Bearer $GITHUB_TOKEN` (1,000 req/hr dedicated quota) before running
-  `scrapling install`, and warns if the patch no longer applies (upstream code change —
-  re-derive the sed against the new `pkgman.py`). Keep the sed patch, the token, and the
-  retry loop.
-- `pip install` uses `--retries 5 --timeout 60` for the same flakiness reasons.
-- Both scraper jobs `timeout-minutes: 15`; both pin Python `3.9`.
+### CI install nuances
+- **HISTORICAL (retired 2026-07-25):** the Camoufox-era workflows carried a
+  3-attempt `scrapling install` retry loop plus a `sed`-patch of
+  `camoufox/pkgman.py` in site-packages (the pip package ≤0.4.11 called the
+  GitHub Releases API unauthenticated, so shared runners randomly hit the 60/hr
+  anonymous 403 limit — killed the 2026-07-05 Daily run). All of that is gone
+  from the workflows along with the browser install itself; if you ever need it
+  back, it lives intact on the `camoufox-backup` branch.
+- `pip install` still uses `--retries 5 --timeout 60` (shared-runner network flakiness).
+- Both scraper jobs `timeout-minutes: 10` (typical run ~1 min); both pin Python `3.9`.
 
 ---
 
 ## 5. Gotchas / hard rules
 
-1. **Scheduling is staggered on purpose.** Historical (07:04) runs before Daily (07:06).
-   The Daily job additionally **sleeps 300s** (`Sleep 5 minutes before running daily
-   scraper`) after the browser install — this serializes the two runs so they don't hammer
-   the source site or the Sheets API simultaneously, and gives Historical time to finish.
-   (See git: "Sequentialize workflow", "2-min offset".) Don't remove the sleep/offset.
+1. **Scheduling is staggered on purpose.** Historical (07:04) runs before Daily (07:06);
+   keep the 2-minute cron offset. The old extra **300s sleep** in the Daily job was
+   removed 2026-07-25 — it existed to serialize the two ~10-minute Camoufox-install
+   runs; now that a run is a single HTTP GET finishing in ~1 min, the cron offset
+   alone provides the ordering it was buying.
 
 2. **Telegram alert triggers differ between the two scrapers** (same threshold value 98,
    different *scope*):
@@ -189,10 +210,13 @@ public — keep it that way.
    prints the status. Neither failure aborts the run / fails the workflow — a failed alert
    is silent. If alerts stop arriving, the scrape can still be succeeding.
 
-6. **Scrape can legitimately return 0 deals** if Leasehackr changes its markup (the
-   `.deal_card` / `.calc_val` CSS classes) or blocks the headless browser. The scripts won't
-   error — they'll just write an empty/unchanged sheet. Use `inspect_structure.py` to
-   diagnose selector drift before "fixing" anything else.
+6. **A dead source now fails loudly instead of writing an empty sheet.** Every fetch
+   tier validates that the literal `deal_card` appears in the HTML; if no tier
+   produces it, `fetcher.fetch_html()` raises and the workflow fails (you get
+   GitHub's failure email). A `deal_card`-present page whose *inner* field classes
+   (`.calc_val`, `.make_val`, …) drifted can still parse to 0/garbled deals without
+   erroring — use `inspect_structure.py` on saved HTML to diagnose selector drift
+   before "fixing" anything else.
 
 7. **Keepalive exists to fight GitHub's 60-day cron auto-disable.** Scrapers never push to
    the repo, so without commits GitHub suspends the schedules. `keepalive.yml` makes an
@@ -200,9 +224,13 @@ public — keep it that way.
    (runs 1st & 15th; has `contents: write`). Don't delete it or the crons will eventually
    stop. `workflow_dispatch` with `force: true` forces a commit.
 
-8. **No tests, no CI lint gate.** The only "CI" is the scheduled scrapers themselves. There
-   is nothing that validates a code change before it runs in production at 07:04/07:06 UTC.
-   Test changes locally (§4) before pushing.
+8. **Tests exist (2026-07-25) but only cover pure logic.** `tests/` pins the parser
+   (against a saved real-card fixture), the 1%-rule scoring, and the fetch chain's
+   tier ordering/validation — `tests.yml` runs them on every push to main. They do
+   NOT touch the network or Sheets, so a green test run does not prove the live
+   site still parses; the scheduled scrapers remain the only end-to-end check.
+   Update `tests/fixtures/deal_cards_sample.html` from a fresh page save if the
+   markup ever changes.
 
 ---
 
@@ -213,10 +241,14 @@ public — keep it that way.
 - **Misleading workflow filename** `weekly_scraper.yml` (it's the *daily Historical*
   scraper) — kept as-is to avoid breaking history; documented in §1.
 - **Duplicated alert/format code** across the two files (see §5.3) is a latent drift risk.
-- **Pinned deps** (`requirements.txt`): `scrapling[all]==0.2.99`, `gspread==5.12.0`,
-  `google-auth==2.35.0`, `beautifulsoup4==4.12.3`, `requests==2.32.3`, `lxml==5.2.2`,
-  `certifi==2024.6.2`. Bumping `scrapling` may change the Camoufox install behaviour — test
-  the CI `scrapling install` step after any bump.
+- **Pinned deps** (`requirements.txt`): `gspread==5.12.0`, `google-auth==2.35.0`,
+  `beautifulsoup4==4.12.3`, `requests==2.32.3`, `lxml==5.2.2`, `certifi==2024.6.2`.
+  `scrapling` was removed 2026-07-25 (fetch chain tier 3 lazy-imports it only if
+  someone installs it manually; the pinned Camoufox world lives on `camoufox-backup`).
+- **Lightpanda tier pins nothing:** tier 2 downloads the `nightly` release binary,
+  which moves. If a future nightly breaks flags this repo uses (`fetch --dump html
+  --wait-selector`), the tier degrades to a logged failure and the chain falls
+  through — the requests tier keeps carrying the daily runs regardless.
 
 ---
 
@@ -224,12 +256,15 @@ public — keep it that way.
 
 | File | What it does |
 |---|---|
-| `scraper.py` | **Historical scraper** + shared library. `LeaseDeal` dataclass, `calculate_score` (1% rule), `scrape_deals` (StealthyFetcher fetch + BS4 parse), `get_google_client`/`get_spreadsheet_id`, dedup/merge/sort helpers, `send_telegram_alert`, `main()` (cumulative rewrite of `sheet1`). |
+| `fetcher.py` | **Fetch layer.** `fetch_html()` three-tier chain: requests → Lightpanda (on-demand binary, `LIGHTPANDA_BIN` override) → scrapling-if-installed; validates `deal_card` presence per tier; raises if all fail. |
+| `scraper.py` | **Historical scraper** + shared library. `LeaseDeal` dataclass, `calculate_score` (1% rule), `scrape_deals` (`fetcher.fetch_html()` + BS4 parse), `get_google_client`/`get_spreadsheet_id`, dedup/merge/sort helpers, `send_telegram_alert`, `main()` (cumulative rewrite of `sheet1`). |
 | `scraper_daily.py` | **Daily scraper.** Imports `scraper` for fetch/score/auth; owns the `Daily` tab (create/clear/keep-headers), dedups within today's scrape, `send_daily_telegram_alert`, `main()`. |
 | `inspect_structure.py` | Debug helper (CLI, `-f/--file`): inspect `.deal_card`/`.calc_val` structure from a saved HTML file. Not used by CI. |
 | `requirements.txt` | Pinned Python deps (see §6). |
+| `tests/` | pytest suite (25 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, mocked — no network). |
 | `.github/workflows/weekly_scraper.yml` | **Historical** cron (07:04 UTC daily) → runs `scraper.py`. |
-| `.github/workflows/daily_scraper.yml` | **Daily** cron (07:06 UTC daily, +5min sleep) → runs `scraper_daily.py`. |
+| `.github/workflows/daily_scraper.yml` | **Daily** cron (07:06 UTC daily) → runs `scraper_daily.py`. |
+| `.github/workflows/tests.yml` | pytest on every push to main / PR / manual. |
 | `.github/workflows/keepalive.yml` | Empty-commit keepalive (1st & 15th) to prevent cron auto-disable. |
 | `.gitignore` | Ignores `credentials.json`, `page_source.html`, venvs, caches, `.env*`. |
 
