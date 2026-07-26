@@ -1,5 +1,6 @@
 """fetcher — tier ordering, validation, and loud failure. No network calls."""
 
+import sys
 from unittest import mock
 
 import pytest
@@ -59,8 +60,12 @@ def test_requests_tier_survives_exceptions(monkeypatch):
     assert fetcher._fetch_requests(fetcher.PND_URL) is None
 
 
-def test_scrapling_tier_skips_cleanly_when_not_installed():
-    # scrapling is no longer in requirements — the tier must degrade to None.
+def test_scrapling_tier_skips_cleanly_when_not_installed(monkeypatch):
+    # Simulate scrapling being absent even if this machine has it installed —
+    # a None entry in sys.modules makes `from scrapling import ...` raise
+    # ImportError. Without this, the test would launch a REAL Camoufox fetch
+    # on old clones that still have scrapling, hanging the suite for minutes.
+    monkeypatch.setitem(sys.modules, 'scrapling', None)
     assert fetcher._fetch_scrapling(fetcher.PND_URL) is None
 
 
