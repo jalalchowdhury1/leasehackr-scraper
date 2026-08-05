@@ -44,6 +44,21 @@ for parsing · `gspread` + `google-auth` for Sheets · `requests` for the Telegr
 > from ~10+ min to ~1 min. **Rollback:** branch `camoufox-backup` / tag
 > `v1-camoufox` hold the original implementation exactly as it was.
 
+> **2026-08-05 regional boards (both workflows were failing since 08-04).** The
+> site split the board into **seven regions** and `/` is now geo-routed to the
+> *visitor's* region. A GitHub runner in Azure us-east therefore got the
+> Mid-Atlantic board — which had **zero** deals — so the `deal_card` validation
+> marker was missing, every tier "failed", and `fetch_html()` raised. The same
+> URL from a Rhode Island laptop showed the Northeast board fine, which is why
+> this looked like markup drift and wasn't.
+> Two fixes: scrape **all seven `/r/<Region>` routes and union them**
+> (`fetcher.fetch_all_regions()`, deduped by `deal.signature`), and validate on
+> **`PAGE_MARKER` = the region filter bar** instead of `deal_card`, so a region
+> with no listings is a healthy page rather than a dead source. Never scrape `/`
+> — the sheet silently becomes "whatever region the runner landed in".
+> This also explains the wild pre-fix deal counts (117 → 93 → 7 → 0): those were
+> regions, not the board draining.
+
 ---
 
 ## 2. Architecture / data flow
@@ -68,22 +83,34 @@ Both scrapers share one fetch+parse+score pipeline. `scraper_daily.py` **imports
 strategy and the alert trigger differ.
 
 ### The scrape itself (`scraper.scrape_deals`)
-- Fetches `https://pnd.leasehackr.com/` via `fetcher.fetch_html()` — a three-tier
-  fallback chain, each tier validated by the presence of the literal `deal_card`
-  in the HTML (a fetched-but-empty/blocked/redesigned page falls through):
+- Fetches **all seven regional boards** — `https://pnd.leasehackr.com/r/<Region>`
+  for `California, Northeast, Mid-Atlantic, South, West, Northwest, Midwest` —
+  via `fetcher.fetch_all_regions()`, and unions them, deduping on
+  `deal.signature`. There is no "all regions" route; the union **is** the board.
+  Bare `/` is geo-routed to the caller's own region and must not be scraped.
+  If **any** region fails, the whole run raises (a partial board written to the
+  sheet would read as "those deals are gone" and poison dedup/history).
+- Each region goes through a three-tier fallback chain, every tier validated by
+  the presence of `fetcher.PAGE_MARKER` (`portal_filter region deals`, the
+  region filter bar) — **not** `deal_card`, so a region with zero listings is a
+  healthy page. A blocked/redesigned page still falls through:
   1. **`requests` GET** (3 attempts, 30s timeout, desktop Chrome UA) — the normal
      path; the page is fully server-rendered.
   2. **Lightpanda** ([lightpanda-io/browser](https://github.com/lightpanda-io/browser),
      single static binary downloaded on demand from the nightly release into the
      temp dir, cached across same-runner invocations; `LIGHTPANDA_BIN` env
-     overrides the path) — run as `fetch --dump html --wait-selector .deal_card`.
-     Covers the site ever becoming JS-rendered. Both tiers verified live
-     2026-07-25: 129/129 deals each.
+     overrides the path) — run as `fetch --dump html --wait-selector
+     .portal_filter` (waiting on `.deal_card` timed out for 60s on every
+     dealless region). Covers the site ever becoming JS-rendered. Both tiers
+     verified live 2026-07-25: 129/129 deals each.
   3. **scrapling `StealthyFetcher`** (the original Camoufox path) — lazy import;
      silently skipped unless `scrapling[all]` is installed (it is NOT in
      `requirements.txt` any more). Covers the site ever adding bot detection.
-  - If **all** tiers fail, `fetch_html()` **raises** → the workflow fails loudly
-    (see §5.6 — this replaced the old "silently write an empty sheet" behaviour).
+  - If **all** tiers fail for a region, `fetch_html()` **raises** → the workflow
+    fails loudly (see §5.6 — this replaced the old "silently write an empty
+    sheet" behaviour). If every region fetches cleanly but nothing is listed,
+    `scrape_deals()` prints a WARNING and returns `[]` — that is a real state of
+    the board, not a scrape failure.
 - Parses the rendered HTML with BeautifulSoup, finds all `div.deal_card`, and for each card
   reads CSS-class fields: `.make_val .model_val .model_yr_val .trim_val .msrp_val
   .monthly_val .das_val .term_val .mileage_val` and the calculator link `.calc_val`.
@@ -141,7 +168,7 @@ export TELEGRAM_CHAT_ID=...      # optional locally
 python scraper.py          # Historical (cumulative → sheet1)
 python scraper_daily.py    # Daily (snapshot → "Daily" tab)
 
-python -m pytest tests/ -q # 25 tests: parser (real-card fixture), score, fetch chain
+python -m pytest tests/ -q # 31 tests: parser (real-card fixture), score, fetch chain + regions
 ```
 
 `inspect_structure.py` is a **debug-only** helper (not run by CI): point it at a saved HTML
@@ -210,13 +237,17 @@ public — keep it that way.
    prints the status. Neither failure aborts the run / fails the workflow — a failed alert
    is silent. If alerts stop arriving, the scrape can still be succeeding.
 
-6. **A dead source now fails loudly instead of writing an empty sheet.** Every fetch
-   tier validates that the literal `deal_card` appears in the HTML; if no tier
-   produces it, `fetcher.fetch_html()` raises and the workflow fails (you get
-   GitHub's failure email). A `deal_card`-present page whose *inner* field classes
-   (`.calc_val`, `.make_val`, …) drifted can still parse to 0/garbled deals without
-   erroring — use `inspect_structure.py` on saved HTML to diagnose selector drift
-   before "fixing" anything else.
+6. **A dead source fails loudly instead of writing an empty sheet — but an empty
+   *board* does not.** Every fetch tier validates `PAGE_MARKER`
+   (`portal_filter region deals`); if no tier produces it for some region,
+   `fetcher.fetch_html()` raises and the workflow fails (you get GitHub's failure
+   email). It deliberately does **not** validate `deal_card`: that conflated "the
+   source is dead" with "this region has nothing listed today", and on 2026-08-04
+   took both workflows down for two days once the runner's region emptied out.
+   A valid page whose *inner* field classes (`.calc_val`, `.make_val`, …) drifted
+   can still parse to 0/garbled deals without erroring — use
+   `inspect_structure.py` on saved HTML to diagnose selector drift before
+   "fixing" anything else.
 
 7. **Keepalive exists to fight GitHub's 60-day cron auto-disable.** Scrapers never push to
    the repo, so without commits GitHub suspends the schedules. `keepalive.yml` makes an
@@ -256,12 +287,12 @@ public — keep it that way.
 
 | File | What it does |
 |---|---|
-| `fetcher.py` | **Fetch layer.** `fetch_html()` three-tier chain: requests → Lightpanda (on-demand binary, `LIGHTPANDA_BIN` override) → scrapling-if-installed; validates `deal_card` presence per tier; raises if all fail. |
+| `fetcher.py` | **Fetch layer.** `REGIONS` + `fetch_all_regions()` (union of the seven `/r/<Region>` boards; raises if any region fails). `fetch_html()` three-tier chain: requests → Lightpanda (on-demand binary, `LIGHTPANDA_BIN` override) → scrapling-if-installed; validates `PAGE_MARKER` (the region filter bar, **not** `deal_card`) per tier; raises if all fail. |
 | `scraper.py` | **Historical scraper** + shared library. `LeaseDeal` dataclass, `calculate_score` (1% rule), `scrape_deals` (`fetcher.fetch_html()` + BS4 parse), `get_google_client`/`get_spreadsheet_id`, dedup/merge/sort helpers, `send_telegram_alert`, `main()` (cumulative rewrite of `sheet1`). |
 | `scraper_daily.py` | **Daily scraper.** Imports `scraper` for fetch/score/auth; owns the `Daily` tab (create/clear/keep-headers), dedups within today's scrape, `send_daily_telegram_alert`, `main()`. |
 | `inspect_structure.py` | Debug helper (CLI, `-f/--file`): inspect `.deal_card`/`.calc_val` structure from a saved HTML file. Not used by CI. |
 | `requirements.txt` | Pinned Python deps (see §6). |
-| `tests/` | pytest suite (25 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, mocked — no network). |
+| `tests/` | pytest suite (31 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, region fan-out, mocked — no network). |
 | `.github/workflows/weekly_scraper.yml` | **Historical** cron (07:04 UTC daily) → runs `scraper.py`. |
 | `.github/workflows/daily_scraper.yml` | **Daily** cron (07:06 UTC daily) → runs `scraper_daily.py`. |
 | `.github/workflows/tests.yml` | pytest on every push to main / PR / manual. |

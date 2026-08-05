@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Scraper script to extract lease deals from leasehackr.com and push to Google Sheets.
-Fetches via fetcher.fetch_html() (requests → Lightpanda → scrapling fallback
-chain) and uses gspread to write to Google Sheets.
+Fetches every regional board via fetcher.fetch_all_regions() (each region tried
+requests → Lightpanda → scrapling) and uses gspread to write to Google Sheets.
 """
 
 import os
@@ -13,7 +13,7 @@ from typing import Optional
 import requests
 from bs4 import BeautifulSoup
 
-from fetcher import fetch_html
+from fetcher import REGIONS, fetch_all_regions
 from google.oauth2.service_account import Credentials
 import gspread
 from urllib.parse import urlparse, parse_qs
@@ -281,26 +281,38 @@ def parse_deal_card(card) -> Optional[LeaseDeal]:
 
 def scrape_deals() -> list:
     """
-    Fetch the live page and scrape all deals.
+    Fetch every regional board and scrape all deals across them.
+
+    `/` is geo-routed to the visitor's own region, so scraping it would capture
+    only whatever region the runner's IP lands in (see fetcher.py). The board is
+    the union of the seven regions, deduplicated by signature.
     """
-    print("Fetching https://pnd.leasehackr.com/ ...")
-    # Tiered fetch: requests → Lightpanda → scrapling (see fetcher.py).
-    # Raises if every tier fails, so a broken fetch fails the workflow loudly
-    # instead of writing an empty sheet.
-    html_content = fetch_html()
-    soup = BeautifulSoup(html_content, 'html.parser')
+    print(f"Fetching {len(REGIONS)} regional boards from pnd.leasehackr.com ...")
+    # Tiered fetch per region: requests → Lightpanda → scrapling (see
+    # fetcher.py). Raises if any region fails every tier, so a broken fetch
+    # fails the workflow loudly instead of writing a partial sheet.
+    boards = fetch_all_regions()
 
-    # Find all deal cards
-    deal_cards = soup.find_all('div', class_='deal_card')
-    print(f"Found {len(deal_cards)} deal cards")
-
-    # Extract data from each deal card
     deals = []
-    for card in deal_cards:
-        deal = parse_deal_card(card)
-        if deal:
-            deals.append(deal)
-    
+    seen = set()
+    for region, html_content in boards.items():
+        soup = BeautifulSoup(html_content, 'html.parser')
+        deal_cards = soup.find_all('div', class_='deal_card')
+
+        added = 0
+        for card in deal_cards:
+            deal = parse_deal_card(card)
+            if deal and deal.signature not in seen:
+                seen.add(deal.signature)
+                deals.append(deal)
+                added += 1
+        print(f"  {region:<13} {len(deal_cards):3} cards -> {added} new")
+
+    print(f"Found {len(deals)} unique deal cards across {len(boards)} regions")
+    if not deals:
+        # Every region fetched cleanly but listed nothing. That is a real (if
+        # unusual) state of the board, NOT a scrape failure — don't raise.
+        print("WARNING: every region fetched OK but the board is empty today")
     return deals
 
 

@@ -8,14 +8,25 @@ import pytest
 import fetcher
 
 
-GOOD_HTML = '<html><div class="deal_card">x</div></html>'
+# A real PND page always carries the region filter bar, whether or not that
+# region currently has any deals. `deal_card` only appears when it does.
+PAGE_HTML = '<html><div class="portal_filter region deals ">Northeast</div>'
+GOOD_HTML = PAGE_HTML + '<div class="deal_card None">x</div></html>'
+EMPTY_REGION_HTML = PAGE_HTML + '</html>'
 BAD_HTML = '<html>maintenance page</html>'
 
 
-def test_valid_requires_marker():
+def test_valid_requires_page_marker():
     assert fetcher._valid(GOOD_HTML)
     assert not fetcher._valid(BAD_HTML)
     assert not fetcher._valid(None)
+
+
+def test_valid_accepts_region_page_with_zero_deals():
+    """Regression (2026-08-05): a region with no deals is a healthy page, not a
+    failed fetch. Validating on `deal_card` made every empty region look like a
+    dead source and hard-failed both workflows."""
+    assert fetcher._valid(EMPTY_REGION_HTML)
 
 
 def test_tier1_success_skips_other_tiers(monkeypatch):
@@ -80,3 +91,45 @@ def test_lightpanda_asset_mapping(monkeypatch, system, machine, expected):
     monkeypatch.setattr(fetcher.platform, 'system', lambda: system)
     monkeypatch.setattr(fetcher.platform, 'machine', lambda: machine)
     assert fetcher._lightpanda_asset() == expected
+
+
+# --- regional boards (2026-08-05) ------------------------------------------
+
+def test_region_url_uses_the_route_from_the_filter_bar():
+    assert fetcher.region_url('Mid-Atlantic') == \
+        'https://pnd.leasehackr.com/r/Mid-Atlantic'
+
+
+def test_regions_match_the_sites_filter_bar():
+    assert fetcher.REGIONS == ('California', 'Northeast', 'Mid-Atlantic',
+                               'South', 'West', 'Northwest', 'Midwest')
+
+
+def test_fetch_all_regions_fetches_every_region(monkeypatch):
+    seen = []
+
+    def fake(url):
+        seen.append(url)
+        return GOOD_HTML
+
+    monkeypatch.setattr(fetcher, 'fetch_html', fake)
+    out = fetcher.fetch_all_regions()
+    assert list(out) == list(fetcher.REGIONS)
+    assert seen == [fetcher.region_url(r) for r in fetcher.REGIONS]
+
+
+def test_fetch_all_regions_keeps_empty_regions(monkeypatch):
+    monkeypatch.setattr(fetcher, 'fetch_html', lambda url: EMPTY_REGION_HTML)
+    assert list(fetcher.fetch_all_regions()) == list(fetcher.REGIONS)
+
+
+def test_fetch_all_regions_raises_if_any_region_fails(monkeypatch):
+    """A partial national board must not be written to the sheet silently."""
+    def fake(url):
+        if url.endswith('/South'):
+            raise RuntimeError('all tiers failed')
+        return GOOD_HTML
+
+    monkeypatch.setattr(fetcher, 'fetch_html', fake)
+    with pytest.raises(RuntimeError, match='South'):
+        fetcher.fetch_all_regions()
