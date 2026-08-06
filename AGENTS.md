@@ -19,14 +19,14 @@ the same spreadsheet:
 
 | Workflow file | Display name | Entry point | Cron (UTC) | Sheet tab written | Behaviour |
 |---|---|---|---|---|---|
-| `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | `4 7 * * *` (07:04 daily) | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
-| `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | `6 7 * * *` (07:06 daily) | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
+| `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | `54 3 * * *` (03:54 daily) | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
+| `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | `56 3 * * *` (03:56 daily) | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
 | `.github/workflows/tests.yml` | Tests | pytest | on push to main | n/a | Runs `tests/` (parser/score/fetcher; no network) |
 | `.github/workflows/keepalive.yml` | Keepalive | (inline shell) | `17 3 1,15 * *` (1st & 15th) | n/a (commits to repo) | Empty commit if repo idle ≥40 days, to stop GitHub auto-disabling the crons |
 
 > ⚠️ **Naming is misleading — verify against this table, not the filenames.**
-> `weekly_scraper.yml` is **not** weekly; it runs **daily** at 07:04 UTC and is the
-> *Historical* (cumulative) scraper. `daily_scraper.yml` runs daily at 07:06 UTC. Both run
+> `weekly_scraper.yml` is **not** weekly; it runs **daily** at 03:54 UTC and is the
+> *Historical* (cumulative) scraper. `daily_scraper.yml` runs daily at 03:56 UTC. Both run
 > every day, 2 minutes apart.
 > The "weekly" filename is a historical artifact (git: "Fix: Historical scraper runs daily").
 
@@ -66,7 +66,7 @@ for parsing · `gspread` + `google-auth` for Sheets · `requests` for the Telegr
 ```
 GitHub Actions cron (daily)
    │
-   ├─ scraper.py (Historical, 07:04 UTC)        ├─ scraper_daily.py (Daily, 07:06 UTC)
+   ├─ scraper.py (Historical, 03:54 UTC)        ├─ scraper_daily.py (Daily, 03:56 UTC)
    │   1. read existing rows from sheet1         │   1. open/create "Daily" tab
    │   2. scrape pnd.leasehackr.com              │   2. clear tab, re-write headers
    │   3. score deals (1% rule)                  │   3. scrape pnd.leasehackr.com  ──┐
@@ -205,11 +205,28 @@ public — keep it that way.
 
 ## 5. Gotchas / hard rules
 
-1. **Scheduling is staggered on purpose.** Historical (07:04) runs before Daily (07:06);
+1. **Scheduling is staggered on purpose.** Historical (03:54) runs before Daily (03:56);
    keep the 2-minute cron offset. The old extra **300s sleep** in the Daily job was
    removed 2026-07-25 — it existed to serialize the two ~10-minute Camoufox-install
    runs; now that a run is a single HTTP GET finishing in ~1 min, the cron offset
    alone provides the ordering it was buying.
+
+   **The crons were moved 07:04/07:06 → 03:54/03:56 UTC on 2026-08-06, and the reason
+   is not obvious from this repo.** Two facts drive it:
+   - **GitHub starts these ~2h35m LATE, consistently.** Measured over 4 runs on both
+     workflows (2026-08-04→06): cron 07:04 → actual 09:35–09:38 UTC, cron 07:06 →
+     actual 09:39–09:42 UTC. Free-tier scheduled runs queue behind paid ones; the
+     cron time is a *floor*, never a start time. **Never reason about when these
+     land from the cron alone — check `gh run list --json createdAt`.**
+   - **`fleet-health` (a separate repo, `github-notion-sync`) grades both of these
+     workflows at 09:00 UTC** (5:00 AM EDT, launchd `com.jalal.fleet-health`). At
+     07:04/07:06 the real runs landed 09:35–09:42, i.e. **38–42 minutes AFTER the
+     grader**, so the daily fleet digest was passing/failing this repo on
+     *yesterday's* run. The 48h `max_age_h` window hid it — nothing ever alerted.
+
+   New expected real start is ~06:29/06:31 UTC, leaving ~2.5h of slack before the
+   09:00 UTC check. **If you retime these again, keep the real (delayed) finish
+   before 09:00 UTC**, and keep the 2-minute offset.
 
 2. **Telegram alert triggers differ between the two scrapers** (same threshold value 98,
    different *scope*):
@@ -293,8 +310,8 @@ public — keep it that way.
 | `inspect_structure.py` | Debug helper (CLI, `-f/--file`): inspect `.deal_card`/`.calc_val` structure from a saved HTML file. Not used by CI. |
 | `requirements.txt` | Pinned Python deps (see §6). |
 | `tests/` | pytest suite (31 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, region fan-out, mocked — no network). |
-| `.github/workflows/weekly_scraper.yml` | **Historical** cron (07:04 UTC daily) → runs `scraper.py`. |
-| `.github/workflows/daily_scraper.yml` | **Daily** cron (07:06 UTC daily) → runs `scraper_daily.py`. |
+| `.github/workflows/weekly_scraper.yml` | **Historical** cron (03:54 UTC daily) → runs `scraper.py`. |
+| `.github/workflows/daily_scraper.yml` | **Daily** cron (03:56 UTC daily) → runs `scraper_daily.py`. |
 | `.github/workflows/tests.yml` | pytest on every push to main / PR / manual. |
 | `.github/workflows/keepalive.yml` | Empty-commit keepalive (1st & 15th) to prevent cron auto-disable. |
 | `.gitignore` | Ignores `credentials.json`, `page_source.html`, venvs, caches, `.env*`. |

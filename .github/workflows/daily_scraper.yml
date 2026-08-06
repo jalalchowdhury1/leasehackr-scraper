@@ -1,8 +1,11 @@
 name: Daily Scraper
 on:
   schedule:
-    # Runs at 7:06 AM UTC (3:06 AM EDT / 2:06 AM EST) every day
-    - cron: '6 7 * * *'
+    # Runs at 03:56 UTC (11:56 PM EDT prev day / 10:56 PM EST) every day.
+    # Moved earlier from 07:06 on 2026-08-06 so this lands BEFORE the 09:00 UTC
+    # (5:00 AM EDT) fleet-health check — see note 1 in AGENTS.md. Keeps the
+    # deliberate 2-minute offset behind Historical (03:54).
+    - cron: '56 3 * * *'
   workflow_dispatch: # Allows manual triggering from the GitHub UI
 jobs:
   daily:
