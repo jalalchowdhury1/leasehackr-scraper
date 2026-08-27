@@ -168,7 +168,7 @@ export TELEGRAM_CHAT_ID=...      # optional locally
 python scraper.py          # Historical (cumulative → sheet1)
 python scraper_daily.py    # Daily (snapshot → "Daily" tab)
 
-python -m pytest tests/ -q # 31 tests: parser (real-card fixture), score, fetch chain + regions
+python -m pytest tests/ -q # 41 tests: parser (real-card fixture), score, fetch chain + regions, Sheets retry
 ```
 
 `inspect_structure.py` is a **debug-only** helper (not run by CI): point it at a saved HTML
@@ -282,6 +282,27 @@ public — keep it that way.
 
 ---
 
+9. **Every Google Sheets call goes through `scraper.sheets_call()` — never call
+   gspread directly.** On 2026-08-27 the Daily run died on
+   `APIError: {'code': 503, 'status': 'UNAVAILABLE'}` thrown out of
+   `spreadsheet.worksheet("Daily")` — a *metadata read*, before a single deal was
+   scraped — while the Historical run 30 s later was fine. The sheet was healthy;
+   the call just had nothing around it. `sheets_call` retries 429/500/502/503/504
+   and dropped connections, 4 attempts, 2→4→8 s backoff.
+   **Three rules it encodes, all load-bearing:**
+   - **403/404 fail fast.** Bad credentials or a wrong `SPREADSHEET_ID` fail
+     identically forever; retrying them just burns the job's 10-minute cap.
+   - **`WorksheetNotFound` is never retried** — it is not an error here.
+     `get_daily_worksheet` catches it to create the Daily tab on first run, so it
+     has to reach the caller untouched. It is a `GSpreadException`, not an
+     `APIError`, so the wrapper passes it through by construction.
+   - **Only rejected requests are retried.** 429/5xx mean the write was never
+     applied, so re-sending `append_rows` cannot duplicate rows. Do not widen the
+     retryable set to arbitrary HTTP errors without thinking that through.
+   Status is read as `.code` **or** `.response.status_code`: gspread 5.12 (the
+   pinned version) has no `.code` at all, so keying on it alone would silently
+   classify every 503 as non-retryable and change nothing.
+
 ## 6. Known issues / open items
 
 - **No README / human landing page** — only this AGENTS.md. (Acceptable for a personal
@@ -305,11 +326,11 @@ public — keep it that way.
 | File | What it does |
 |---|---|
 | `fetcher.py` | **Fetch layer.** `REGIONS` + `fetch_all_regions()` (union of the seven `/r/<Region>` boards; raises if any region fails). `fetch_html()` three-tier chain: requests → Lightpanda (on-demand binary, `LIGHTPANDA_BIN` override) → scrapling-if-installed; validates `PAGE_MARKER` (the region filter bar, **not** `deal_card`) per tier; raises if all fail. |
-| `scraper.py` | **Historical scraper** + shared library. `LeaseDeal` dataclass, `calculate_score` (1% rule), `scrape_deals` (`fetcher.fetch_html()` + BS4 parse), `get_google_client`/`get_spreadsheet_id`, dedup/merge/sort helpers, `send_telegram_alert`, `main()` (cumulative rewrite of `sheet1`). |
+| `scraper.py` | **Historical scraper** + shared library. `LeaseDeal` dataclass, `calculate_score` (1% rule), `scrape_deals` (`fetcher.fetch_html()` + BS4 parse), `get_google_client`/`get_spreadsheet_id`, `sheets_call` (the Sheets retry wrapper — see §5), dedup/merge/sort helpers, `send_telegram_alert`, `main()` (cumulative rewrite of `sheet1`). |
 | `scraper_daily.py` | **Daily scraper.** Imports `scraper` for fetch/score/auth; owns the `Daily` tab (create/clear/keep-headers), dedups within today's scrape, `send_daily_telegram_alert`, `main()`. |
 | `inspect_structure.py` | Debug helper (CLI, `-f/--file`): inspect `.deal_card`/`.calc_val` structure from a saved HTML file. Not used by CI. |
 | `requirements.txt` | Pinned Python deps (see §6). |
-| `tests/` | pytest suite (31 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, region fan-out, mocked — no network). |
+| `tests/` | pytest suite (41 tests): `test_parser.py` (real-card fixture in `tests/fixtures/`), `test_score.py` (1% rule), `test_fetcher.py` (tier ordering/validation, region fan-out, mocked — no network), `test_sheets_retry.py` (`sheets_call` classification + the 2026-08-27 503 regression). |
 | `.github/workflows/weekly_scraper.yml` | **Historical** cron (03:54 UTC daily) → runs `scraper.py`. |
 | `.github/workflows/daily_scraper.yml` | **Daily** cron (03:56 UTC daily) → runs `scraper_daily.py`. |
 | `.github/workflows/tests.yml` | pytest on every push to main / PR / manual. |

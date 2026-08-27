@@ -37,15 +37,16 @@ def get_daily_worksheet(client: gspread.Client, spreadsheet_id: str):
     """
     Open or create the 'Daily' worksheet within the spreadsheet.
     """
-    spreadsheet = client.open_by_key(spreadsheet_id)
+    spreadsheet = scraper.sheets_call(client.open_by_key, spreadsheet_id)
 
     # Try to find an existing sheet named "Daily"
     try:
-        worksheet = spreadsheet.worksheet(DAILY_SHEET_NAME)
+        worksheet = scraper.sheets_call(spreadsheet.worksheet, DAILY_SHEET_NAME)
         print(f"Found existing worksheet: '{DAILY_SHEET_NAME}'")
     except gspread.exceptions.WorksheetNotFound:
         # Add a new sheet
-        worksheet = spreadsheet.add_worksheet(
+        worksheet = scraper.sheets_call(
+            spreadsheet.add_worksheet,
             title=DAILY_SHEET_NAME,
             rows=1,
             cols=13
@@ -60,9 +61,9 @@ def clear_sheet_keep_headers(worksheet) -> None:
     Clear all data rows below the header row (row 1) without deleting the header row.
     gspread's clear() wipes everything, so we fetch, keep headers, clear, then re-write headers.
     """
-    all_values = worksheet.get_all_values()
-    worksheet.clear()
-    worksheet.append_row(HEADERS)
+    all_values = scraper.sheets_call(worksheet.get_all_values)
+    scraper.sheets_call(worksheet.clear)
+    scraper.sheets_call(worksheet.append_row, HEADERS)
     if all_values and len(all_values) > 1:
         print(f"Cleared {len(all_values) - 1} previous data rows. Headers written: {HEADERS}")
     else:
@@ -180,7 +181,7 @@ def main():
     print(f"\n[5/5] Writing {len(sorted_deals)} deals to the '{DAILY_SHEET_NAME}' sheet...")
     if sorted_deals:
         rows = [deal.to_list() for deal in sorted_deals]
-        worksheet.append_rows(rows)
+        scraper.sheets_call(worksheet.append_rows, rows)
 
     print(f"\n✅ Daily sheet refreshed with {len(sorted_deals)} deals!")
 

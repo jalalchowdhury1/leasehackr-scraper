@@ -7,6 +7,7 @@ requests → Lightpanda → scrapling) and uses gspread to write to Google Sheet
 
 import os
 import json
+import time
 from dataclasses import dataclass, asdict
 from typing import Optional
 
@@ -134,6 +135,56 @@ def send_telegram_alert(hot_deals: list) -> None:
         print(f"Failed to send Telegram alert: {e}")
 
 
+# ── Google Sheets retry ─────────────────────────────────────────────────────
+# Every Sheets call goes through sheets_call(). Sheets returns a transient 503
+# often enough to matter: on 2026-08-27 one came back from the *metadata read*
+# inside `spreadsheet.worksheet("Daily")` and killed the whole Daily run before
+# a single deal was scraped, while the Historical run 30 s later was fine.
+#
+# Retry only what a retry can fix. 429 and 5xx mean the request was REJECTED —
+# nothing was applied, so re-sending an append cannot duplicate rows. 403/404
+# (bad credentials, wrong spreadsheet id) fail the same way forever, and
+# WorksheetNotFound is not an error at all here — scraper_daily catches it to
+# create the Daily tab on first run, so it must reach the caller untouched.
+SHEETS_RETRY_ATTEMPTS = 4
+SHEETS_RETRY_BASE_S = 2
+RETRYABLE_SHEETS_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+def _sheets_status(exc) -> Optional[int]:
+    """HTTP status behind a gspread APIError.
+
+    gspread 5.12 (pinned here) exposes only `.response`; 6.x adds `.code`. Read
+    both — keying on `.code` alone silently classifies every 503 as
+    non-retryable on the version we actually run.
+    """
+    code = getattr(exc, "code", None)
+    if code is None:
+        code = getattr(getattr(exc, "response", None), "status_code", None)
+    return code
+
+
+def sheets_call(fn, *args, **kwargs):
+    """Call a gspread method, retrying transient failures with exponential backoff."""
+    for attempt in range(1, SHEETS_RETRY_ATTEMPTS + 1):
+        try:
+            return fn(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            status = _sheets_status(e)
+            if status not in RETRYABLE_SHEETS_STATUS or attempt == SHEETS_RETRY_ATTEMPTS:
+                raise
+            reason = f"HTTP {status}"
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout) as e:
+            if attempt == SHEETS_RETRY_ATTEMPTS:
+                raise
+            reason = type(e).__name__
+        pause = SHEETS_RETRY_BASE_S * (2 ** (attempt - 1))
+        print(f"  Sheets {getattr(fn, '__name__', fn)} failed ({reason}) — "
+              f"retry {attempt}/{SHEETS_RETRY_ATTEMPTS - 1} in {pause}s")
+        time.sleep(pause)
+
+
 def get_google_client() -> gspread.Client:
     """
     Initialize and return the Google Sheets client.
@@ -175,7 +226,7 @@ def fetch_existing_rows(worksheet) -> list:
     """
     Fetch existing data from the Google Sheet and ensure every row has 13 columns.
     """
-    existing_rows = worksheet.get_all_values()
+    existing_rows = sheets_call(worksheet.get_all_values)
     print(f"Found {len(existing_rows)} rows in the Google Sheet (including header)")
     
     updated_existing_rows = []
@@ -396,8 +447,8 @@ def main():
     spreadsheet_id = get_spreadsheet_id()
     
     # Open the spreadsheet
-    spreadsheet = client.open_by_key(spreadsheet_id)
-    worksheet = spreadsheet.sheet1
+    spreadsheet = sheets_call(client.open_by_key, spreadsheet_id)
+    worksheet = sheets_call(lambda: spreadsheet.sheet1)
 
     # Define headers (13 columns including Score)
     headers = [
@@ -450,11 +501,11 @@ def main():
 
     # Rewrite the Sheet - Clear and Write Sorted Data
     print("\nRewriting Google Sheet with sorted deals...")
-    worksheet.clear()
-    worksheet.append_row(headers)
+    sheets_call(worksheet.clear)
+    sheets_call(worksheet.append_row, headers)
 
     if all_deals:
-        worksheet.append_rows(all_deals)
+        sheets_call(worksheet.append_rows, all_deals)
     
     print(f"Successfully refreshed the dashboard with {len(all_deals)} sorted deals!")
 
