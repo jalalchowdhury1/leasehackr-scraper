@@ -117,6 +117,12 @@ strategy and the alert trigger differ.
 - Extra fields come from the **query string of the `.calc_val` href**: `sales_price`, `mf`
   (money factor), `resP` (residual %), `sales_tax`.
 - **Interest rate % = `mf * 2400`** (standard lease MF→APR conversion).
+- **One-pay leases** (calc link `onepay=true`, DAS sublabel "one-pay"): the card's
+  `.monthly_val` is `0` and `.das_val` is the single upfront payment. The parser sets
+  `LeaseDeal.one_pay` — NOT a sheet column and NOT in the signature, so the sheet still
+  shows Monthly Payment `0`. Scoring needs no special case (`0 + das/months` is the real
+  per-month cost). Both alerts print the 💰 line via `scraper.payment_line()`:
+  `One-pay: $7,589 upfront (≈$316/mo)` instead of `$0/mo` (fixed 2026-09-12).
 - `model` is stored as the concatenation `"{year} {make} {model} {trim}"`.
 
 ### Scoring (`scraper.calculate_score`) — the "1% rule"
@@ -168,7 +174,7 @@ export TELEGRAM_CHAT_ID=...      # optional locally
 python scraper.py          # Historical (cumulative → sheet1)
 python scraper_daily.py    # Daily (snapshot → "Daily" tab)
 
-python -m pytest tests/ -q # 41 tests: parser (real-card fixture), score, fetch chain + regions, Sheets retry
+python -m pytest tests/ -q # 47 tests: parser (real-card fixtures incl. one-pay), score, fetch chain + regions, Sheets retry
 ```
 
 `inspect_structure.py` is a **debug-only** helper (not run by CI): point it at a saved HTML

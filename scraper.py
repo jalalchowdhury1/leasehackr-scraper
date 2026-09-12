@@ -41,6 +41,10 @@ class LeaseDeal:
     interest_rate: str = ''
     residual_percent: str = ''
     score: float = 0.0
+    # One-pay lease: paid once upfront, so the card's monthly is 0 and
+    # due_at_signing is the single payment. Deliberately NOT a sheet column and
+    # NOT in the signature — the 13-column layout and dedup stay untouched.
+    one_pay: bool = False
 
     def to_list(self) -> list:
         """Convert deal to list format for Google Sheets (matching header order)."""
@@ -105,6 +109,20 @@ def _fmt_money(value) -> str:
         return f"${s}"
 
 
+def payment_line(deal) -> str:
+    """The 💰 alert line. A one-pay lease has no monthly bill, so show the upfront
+    payment and what it works out to per month instead of a misleading '$0/mo'.
+    Shared by both scrapers' alerts."""
+    if deal.one_pay:
+        line = f"💰 One-pay: {_fmt_money(deal.due_at_signing)} upfront"
+        try:
+            das = float(str(deal.due_at_signing).replace('$', '').replace(',', ''))
+            return f"{line} (≈{_fmt_money(das / float(deal.months))}/mo)"
+        except (ValueError, ZeroDivisionError, TypeError):
+            return line
+    return f"💰 {_fmt_money(deal.monthly_payment)}/mo ({_fmt_money(deal.due_at_signing)} DAS)"
+
+
 def send_telegram_alert(hot_deals: list) -> None:
     """
     Send a Telegram alert for brand-new deals scoring >= TELEGRAM_ALERT_THRESHOLD.
@@ -121,7 +139,7 @@ def send_telegram_alert(hot_deals: list) -> None:
         text += (
             f"🔥 Score: {deal.score}/100\n"
             f"🚗 {deal.make} {deal.model}\n"
-            f"💰 {_fmt_money(deal.monthly_payment)}/mo ({_fmt_money(deal.due_at_signing)} DAS)\n"
+            f"{payment_line(deal)}\n"
             f"🏷️ MSRP: {_fmt_money(deal.msrp)} | Term: {deal.months} mo\n"
             f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
@@ -277,6 +295,7 @@ def parse_deal_card(card) -> Optional[LeaseDeal]:
         
         # Extract fields from calculator URL
         calc_link = card.select_one('.calc_val')
+        one_pay = False
         sales_price = ''
         mf = ''
         resP = ''
@@ -290,6 +309,7 @@ def parse_deal_card(card) -> Optional[LeaseDeal]:
             mf = params.get('mf', [''])[0]
             resP = params.get('resP', [''])[0]
             sales_tax = params.get('sales_tax', [''])[0]
+            one_pay = params.get('onepay', [''])[0] == 'true'
         
         # Calculate Interest Rate % = MF * 2400
         interest_rate = ''
@@ -312,7 +332,8 @@ def parse_deal_card(card) -> Optional[LeaseDeal]:
             sales_tax=sales_tax,
             money_factor=mf,
             interest_rate=str(interest_rate),
-            residual_percent=resP
+            residual_percent=resP,
+            one_pay=one_pay
         )
         
         # Calculate score

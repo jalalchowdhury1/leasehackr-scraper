@@ -107,7 +107,7 @@ def send_daily_telegram_alert(hot_deals: list) -> None:
         text += (
             f"🔥 Score: {deal.score}/100\n"
             f"🚗 {deal.make} {deal.model}\n"
-            f"💰 {_fmt_money(deal.monthly_payment)}/mo ({_fmt_money(deal.due_at_signing)} DAS)\n"
+            f"{scraper.payment_line(deal)}\n"
             f"🏷️ MSRP: {_fmt_money(deal.msrp)} | Term: {deal.months} mo\n"
             f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
