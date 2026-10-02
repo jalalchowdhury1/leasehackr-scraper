@@ -20,7 +20,7 @@ the same spreadsheet:
 | Workflow file | Display name | Entry point | Cron (UTC) | Sheet tab written | Behaviour |
 |---|---|---|---|---|---|
 | `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | **AWS One Clock** 23:54 ET (03:54/04:54 UTC); GH backstop `30 5 * * *` | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
-| `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | `56 3 * * *` (03:56 daily) | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
+| `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | **AWS One Clock** 23:56 ET (03:56/04:56 UTC); GH backstop `32 5 * * *` | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
 | `.github/workflows/tests.yml` | Tests | pytest | on push to main | n/a | Runs `tests/` (parser/score/fetcher; no network) |
 | `.github/workflows/keepalive.yml` | Keepalive | (inline shell) | `17 3 1,15 * *` (1st & 15th) | n/a (commits to repo) | Empty commit if repo idle ≥40 days, to stop GitHub auto-disabling the crons |
 
@@ -221,6 +221,12 @@ public — keep it that way.
    BOTH places + run one-clock `scripts/race_audit.py`. Daily (03:56) is still
    GitHub-only; the old Historical-before-Daily ordering no longer matters
    (different tabs, ~1 min runs).
+   **Daily moved to AWS too (2 Oct 2026):** `one-clock-leasehackr-daily`,
+   cron(56 23 * * ? *) America/New_York; GH backstop `32 5 * * *`. Daily alerts
+   on EVERY >=98 deal in the snapshot (not only new ones), so it has a dedupe
+   guard step: skip when a run succeeded in the last 12 h (prints
+   `dedupe guard: ...`), paired with `concurrency: daily-scraper` (no cancel).
+   Manual re-run that must alert again: tick the `force` input.
 
 1. **Scheduling is staggered on purpose.** Historical (03:54) runs before Daily (03:56);
    keep the 2-minute cron offset. The old extra **300s sleep** in the Daily job was

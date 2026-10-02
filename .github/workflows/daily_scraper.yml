@@ -1,12 +1,30 @@
 name: Daily Scraper
 on:
   schedule:
-    # Runs at 03:56 UTC (11:56 PM EDT prev day / 10:56 PM EST) every day.
-    # Moved earlier from 07:06 on 2026-08-06 so this lands BEFORE the 09:00 UTC
-    # (5:00 AM EDT) fleet-health check — see note 1 in AGENTS.md. Keeps the
-    # deliberate 2-minute offset behind Historical (03:54).
-    - cron: '56 3 * * *'
-  workflow_dispatch: # Allows manual triggering from the GitHub UI
+    # BACKSTOP only (2 Oct 2026). The primary is AWS EventBridge
+    # `one-clock-leasehackr-daily`, cron(56 23 * * ? *) America/New_York
+    # = 03:56 UTC (EDT) / 04:56 UTC (EST), via the gh-dispatcher Lambda.
+    # GitHub's cron started this 4.8-6.6h late, after the 09:00 UTC fleet
+    # check. Backstop trails AWS's EST instant by >=30 min (one-clock rule 1).
+    - cron: '32 5 * * *'
+  workflow_dispatch: # AWS One Clock primary + manual runs
+    inputs:
+      force:
+        description: "Run even if a run already succeeded in the last 12 h"
+        type: boolean
+        default: false
+# Unlike Historical, this job alerts on EVERY deal >= 98 in today's snapshot,
+# not only new ones, so a second run would send the SAME alert again. The guard
+# below skips when a run succeeded in the last 12 h (AWS 23:54 ET + backstop,
+# even ~8 h late, sit inside 12 h; the next AWS fire is 24 h later). It only
+# works paired with this queue (one-clock rule 2): a run in flight is invisible
+# to `--status success`, so the second run must WAIT, not overlap.
+concurrency:
+  group: daily-scraper
+  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: read
 jobs:
   daily:
     name: Daily Sheet (scraper_daily.py)
@@ -15,14 +33,35 @@ jobs:
     # Lightpanda fallback) — the whole job normally finishes in ~1 minute.
     timeout-minutes: 10
     steps:
+    - name: Dedupe guard (skip if a run succeeded in the last 12 h)
+      id: guard
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if [ "${{ inputs.force }}" = "true" ]; then echo "dedupe guard: forced run"; exit 0; fi
+        since=$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+        # Fails OPEN: if the API call fails, n=0 and the job runs (a dupe
+        # alert beats a missed day).
+        n=$(gh run list -R "$GITHUB_REPOSITORY" -w daily_scraper.yml --status success \
+              --created ">=$since" --json databaseId \
+              --jq '[.[] | select(.databaseId != ${{ github.run_id }})] | length' 2>/dev/null || echo 0)
+        if [ "${n:-0}" -gt 0 ]; then
+          echo "dedupe guard: a successful run in the last 12 h, skipping (no second alert)"
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "dedupe guard: no successful run in the last 12 h, running"
+        fi
     - name: Checkout repository
+      if: steps.guard.outputs.skip != 'true'
       uses: actions/checkout@v6
     - name: Set up Python
+      if: steps.guard.outputs.skip != 'true'
       uses: actions/setup-python@v6
       with:
         python-version: '3.9'
         cache: 'pip'
     - name: Validate required secrets
+      if: steps.guard.outputs.skip != 'true'
       run: |
         if [ -z "${{ secrets.SPREADSHEET_ID }}" ]; then
           echo "Error: SPREADSHEET_ID secret is not set"
@@ -42,6 +81,7 @@ jobs:
         fi
         echo "All required secrets are present"
     - name: Install Python dependencies
+      if: steps.guard.outputs.skip != 'true'
       run: |
         python -m pip install --upgrade pip
         pip install --retries 5 --timeout 60 -r requirements.txt
@@ -49,6 +89,7 @@ jobs:
     # Historical scraper's slow Camoufox browser install. Fetching is now a
     # plain HTTP GET, so the 2-minute cron stagger (07:04 vs 07:06) is enough.
     - name: Run Daily Scraper
+      if: steps.guard.outputs.skip != 'true'
       env:
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
