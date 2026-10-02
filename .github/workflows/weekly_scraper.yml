@@ -1,12 +1,20 @@
 name: Historical Scraper
 on:
   schedule:
-    # Runs at 03:54 UTC (11:54 PM EDT prev day / 10:54 PM EST) every day.
-    # Moved earlier from 07:04 on 2026-08-06 so this lands BEFORE the 09:00 UTC
-    # (5:00 AM EDT) fleet-health check — see note 1 in AGENTS.md. GitHub starts
-    # these ~2h35m late, so the real start is ~06:29 UTC.
-    - cron: '54 3 * * *'
-  workflow_dispatch: # Allows manual triggering from the GitHub UI
+    # BACKSTOP only (2 Oct 2026). The primary is AWS EventBridge
+    # `one-clock-leasehackr-historical`, cron(54 23 * * ? *) America/New_York
+    # = 03:54 UTC (EDT) / 04:54 UTC (EST), dispatched via the gh-dispatcher
+    # Lambda. GitHub's cron started this job 5-6.5h late (26 Sep-1 Oct), past
+    # the 09:00 UTC fleet check. This backstop must trail AWS's LATER UTC
+    # instant by >=30 min in both DST states (one-clock rule 1; race_audit.py).
+    - cron: '30 5 * * *'
+  workflow_dispatch: # AWS One Clock primary + manual runs
+# AWS + backstop can both fire on one night. Queue, never overlap: two runs at
+# once would both see the same deals as new (double Telegram alert) and race
+# the sheet's clear+rewrite. Run back to back, the second finds nothing new.
+concurrency:
+  group: historical-scraper
+  cancel-in-progress: false
 jobs:
   historical:
     name: Historical Sheet (scraper.py)

@@ -19,7 +19,7 @@ the same spreadsheet:
 
 | Workflow file | Display name | Entry point | Cron (UTC) | Sheet tab written | Behaviour |
 |---|---|---|---|---|---|
-| `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | `54 3 * * *` (03:54 daily) | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
+| `.github/workflows/weekly_scraper.yml` | **Historical Scraper** | `scraper.py` | **AWS One Clock** 23:54 ET (03:54/04:54 UTC); GH backstop `30 5 * * *` | `sheet1` (first/default tab, "Historical") | **Cumulative** — merges scraped deals into all prior rows, dedups, sorts by score, rewrites the whole tab |
 | `.github/workflows/daily_scraper.yml` | **Daily Scraper** | `scraper_daily.py` | `56 3 * * *` (03:56 daily) | `Daily` tab | **Snapshot** — wipes the tab and writes only today's deals, sorted by score |
 | `.github/workflows/tests.yml` | Tests | pytest | on push to main | n/a | Runs `tests/` (parser/score/fetcher; no network) |
 | `.github/workflows/keepalive.yml` | Keepalive | (inline shell) | `17 3 1,15 * *` (1st & 15th) | n/a (commits to repo) | Empty commit if repo idle ≥40 days, to stop GitHub auto-disabling the crons |
@@ -210,6 +210,17 @@ public — keep it that way.
 ---
 
 ## 5. Gotchas / hard rules
+
+0. **Historical is started by AWS since 2 Oct 2026** (one-clock schedule
+   `one-clock-leasehackr-historical`, cron(54 23 * * ? *) America/New_York →
+   gh-dispatcher Lambda → `workflow_dispatch`). GitHub's cron had drifted to
+   5-6.5h late (26 Sep-1 Oct), finishing after the 09:00 UTC fleet check. The
+   GH cron `30 5 * * *` stays as a backstop, ≥30 min after AWS's EST instant.
+   `concurrency: historical-scraper` (no cancel) queues the two; back to back,
+   the second run finds no new deals → no second alert. Change the time in
+   BOTH places + run one-clock `scripts/race_audit.py`. Daily (03:56) is still
+   GitHub-only; the old Historical-before-Daily ordering no longer matters
+   (different tabs, ~1 min runs).
 
 1. **Scheduling is staggered on purpose.** Historical (03:54) runs before Daily (03:56);
    keep the 2-minute cron offset. The old extra **300s sleep** in the Daily job was
