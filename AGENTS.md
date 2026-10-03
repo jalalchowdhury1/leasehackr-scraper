@@ -192,6 +192,7 @@ at the top of each workflow before any scraping):
 | `GOOGLE_CREDENTIALS` | Service-account JSON (full string) | falls back to `credentials.json` file |
 | `TELEGRAM_TOKEN` | Bot token for alerts | optional — alert skipped if unset |
 | `TELEGRAM_CHAT_ID` | Destination chat | optional — alert skipped if unset |
+| `DIGEST_KEY` | health-hub Silent digest sender key (same value as carmax / Dhaka flights; local source `~/.config/secrets.env`). `DIGEST_URL` is set inline in the workflows | optional — unset = direct send |
 
 **Never commit secret values.** `credentials.json` and `.env*` are git-ignored. The repo is
 public — keep it that way.
@@ -272,7 +273,20 @@ public — keep it that way.
    dedup and scoring of existing rows. Add new columns only at the **end**, and update the
    header lists in *both* files plus the index math.
 
-5. **Telegram send is best-effort.** `scraper.py`'s `send_telegram_alert` does not check
+5. **Alerts go to the Silent digest, not the chat (3 Oct 2026).** Both alerts call
+   `scraper.deliver_alert(id, text)`: it POSTs to health-hub `api/digest`
+   (`DIGEST_URL` + `DIGEST_KEY`) and the item rides the ⚪ morning card (06:50-10:00
+   ET) as a button. Ids: **`leasenew`** = Historical, **`leasehackr`** = Daily — two
+   ids because the collector keeps ONE item per id and a same-id post overwrites.
+   The ids must exist in health-hub `lib/digest.js` `SENDERS` (whitelist; an unknown
+   id gets HTTP 400 `unknown sender id`). Collector down / refused / env missing →
+   the old direct send, now **silent** (`disable_notification`). Log lines:
+   `handed to the Silent digest (health-hub id=...) — no direct send` or
+   `digest hand-off refused (HTTP n); sending directly` + `Telegram alert sent
+   successfully (direct, silent)!`. Runs land ~23:55 ET, well before the card.
+   Failure alerts (GitHub failure email) are unchanged.
+
+5b. **Telegram send is best-effort.** `scraper.py`'s `send_telegram_alert` does not check
    the HTTP status (fire-and-forget); `scraper_daily.py`'s `send_daily_telegram_alert`
    prints the status. Neither failure aborts the run / fails the workflow — a failed alert
    is silent. If alerts stop arriving, the scrape can still be succeeding.

@@ -59,4 +59,7 @@ jobs:
         GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
         TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        # Silent digest (3 Oct 2026): alerts go to health-hub's morning card, not the chat.
+        DIGEST_URL: https://jalal-health.vercel.app/api/digest
+        DIGEST_KEY: ${{ secrets.DIGEST_KEY }}
       run: python scraper.py

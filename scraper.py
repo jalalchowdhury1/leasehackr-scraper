@@ -123,17 +123,55 @@ def payment_line(deal) -> str:
     return f"💰 {_fmt_money(deal.monthly_payment)}/mo ({_fmt_money(deal.due_at_signing)} DAS)"
 
 
-def send_telegram_alert(hot_deals: list) -> None:
-    """
-    Send a Telegram alert for brand-new deals scoring >= TELEGRAM_ALERT_THRESHOLD.
-    """
+def digest_post(item_id, text, parse_mode="") -> bool:
+    """Hand an overnight message to the health-hub Silent digest instead of the chat
+    (one ⚪ morning card on the alerts bot, a button per item; a tap replays the
+    full message — same hand-off as carmax-scraper / Dhaka flights, 3 Oct 2026).
+    True = stored; False = caller sends to Telegram directly (silently).
+    Needs DIGEST_URL + DIGEST_KEY. ids are whitelisted by health-hub SENDERS:
+    `leasenew` = Historical (new deals), `leasehackr` = Daily — two ids so the
+    Daily post never overwrites the Historical one (same id = overwrite)."""
+    url, key = os.environ.get("DIGEST_URL"), os.environ.get("DIGEST_KEY")
+    if not url or not key:
+        return False
+    try:
+        r = requests.post(url, params={"k": key}, timeout=10,
+                          json={"id": item_id, "text": text, "parse_mode": parse_mode})
+        if r.status_code == 200 and r.json().get("ok") is True:
+            return True
+        print(f"digest hand-off refused (HTTP {r.status_code}); sending directly")
+        return False
+    except Exception as e:  # noqa: BLE001
+        print(f"digest hand-off failed ({type(e).__name__}); sending directly")
+        return False
+
+
+def deliver_alert(item_id: str, text: str) -> str:
+    """Silent digest first; if the collector is down or the env is missing, the old
+    direct send — now SILENT (disable_notification), the digest-era convention.
+    Returns "digest" | "sent" | "failed" | "skipped" (no Telegram credentials)."""
+    if digest_post(item_id, text):
+        print(f"handed to the Silent digest (health-hub id={item_id}) — no direct send")
+        return "digest"
     token = os.environ.get("TELEGRAM_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-
     if not token or not chat_id:
         print("Telegram credentials not found. Skipping alert.")
-        return
+        return "skipped"
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": chat_id, "text": text, "disable_notification": True}
+    try:
+        resp = requests.post(url, json=payload, timeout=20)
+        if resp.status_code == 200:
+            print("Telegram alert sent successfully (direct, silent)!")
+            return "sent"
+        print(f"Telegram alert failed: {resp.status_code}")
+    except Exception as e:  # noqa: BLE001
+        print(f"Failed to send Telegram alert: {type(e).__name__}")
+    return "failed"
 
+
+def build_new_deals_message(hot_deals: list) -> str:
     text = f"🆕 Leasehackr: {len(hot_deals)} New Deal(s) Scoring ≥ {TELEGRAM_ALERT_THRESHOLD}! 🆕\n\n"
     for deal in hot_deals:
         text += (
@@ -143,14 +181,14 @@ def send_telegram_alert(hot_deals: list) -> None:
             f"🏷️ MSRP: {_fmt_money(deal.msrp)} | Term: {deal.months} mo\n"
             f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
-        
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    try:
-        requests.post(url, json=payload)
-        print("Telegram alert sent successfully!")
-    except Exception as e:
-        print(f"Failed to send Telegram alert: {e}")
+    return text
+
+
+def send_telegram_alert(hot_deals: list) -> str:
+    """
+    Alert on brand-new deals scoring >= TELEGRAM_ALERT_THRESHOLD — via the Silent digest.
+    """
+    return deliver_alert("leasenew", build_new_deals_message(hot_deals))
 
 
 # ── Google Sheets retry ─────────────────────────────────────────────────────

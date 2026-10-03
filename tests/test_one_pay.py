@@ -65,10 +65,11 @@ def _sent_text(monkeypatch, send):
         status_code = 200
         text = ''
 
-    def fake_post(url, json):
+    def fake_post(url, json, **kw):
         sent['text'] = json['text']
         return _Resp()
 
+    monkeypatch.delenv('DIGEST_URL', raising=False)  # direct-send path
     monkeypatch.setenv('TELEGRAM_TOKEN', 't')
     monkeypatch.setenv('TELEGRAM_CHAT_ID', 'c')
     monkeypatch.setattr(scraper.requests, 'post', fake_post)

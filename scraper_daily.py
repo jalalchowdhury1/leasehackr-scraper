@@ -4,7 +4,7 @@ Daily Scraper - extracts today's lease deals from leasehackr.com and pushes to a
 - Wipes the sheet fresh each run (keeps headers intact)
 - Writes only today's scraped deals, sorted by score
 - Deduplicates within today's scrape
-- Telegram alert only if any deal scores ≥ 98
+- Alert only if any deal scores ≥ 98 (Silent digest; silent direct send as fallback)
 """
 
 import os
@@ -88,20 +88,7 @@ def _fmt_money(value) -> str:
         return f"${s}"
 
 
-def send_daily_telegram_alert(hot_deals: list) -> None:
-    """
-    Send a Telegram alert listing all deals scoring >= 98.
-    """
-    if not hot_deals:
-        return
-
-    token = os.environ.get("TELEGRAM_TOKEN")
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-
-    if not token or not chat_id:
-        print("Telegram credentials not found. Skipping alert.")
-        return
-
+def build_daily_message(hot_deals: list) -> str:
     text = f"🚨 Leasehackr Daily Alert: {len(hot_deals)} Deal(s) Score ≥ {TELEGRAM_ALERT_THRESHOLD}!\n\n"
     for deal in hot_deals:
         text += (
@@ -111,17 +98,16 @@ def send_daily_telegram_alert(hot_deals: list) -> None:
             f"🏷️ MSRP: {_fmt_money(deal.msrp)} | Term: {deal.months} mo\n"
             f"📊 Interest: {deal.interest_rate}% | Residual: {deal.residual_percent}%\n\n"
         )
+    return text
 
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text}
-    try:
-        resp = requests.post(url, json=payload)
-        if resp.status_code == 200:
-            print(f"Telegram alert sent successfully ({len(hot_deals)} deal(s))!")
-        else:
-            print(f"Telegram alert failed: {resp.status_code} {resp.text}")
-    except Exception as e:
-        print(f"Failed to send Telegram alert: {e}")
+
+def send_daily_telegram_alert(hot_deals: list) -> str:
+    """
+    Alert on all deals scoring >= 98 — via the Silent digest (scraper.deliver_alert).
+    """
+    if not hot_deals:
+        return "nothing"
+    return scraper.deliver_alert("leasehackr", build_daily_message(hot_deals))
 
 
 def deduplicate_deals(deals: list) -> list:
