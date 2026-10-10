@@ -30,7 +30,7 @@ the same spreadsheet:
 > every day, 2 minutes apart.
 > The "weekly" filename is a historical artifact (git: "Fix: Historical scraper runs daily").
 
-**Stack:** Python 3.9 (CI pin) · plain `requests` GET for fetching (see the fetch
+**Stack:** Python 3.12 (CI pin; was 3.9 until 10 Oct 2026 — 3.9 has no Ubuntu 26.04 build) · plain `requests` GET for fetching (see the fetch
 chain below — the page is server-rendered; verified 2026-07-25) · BeautifulSoup4/lxml
 for parsing · `gspread` + `google-auth` for Sheets · `requests` for the Telegram API.
 

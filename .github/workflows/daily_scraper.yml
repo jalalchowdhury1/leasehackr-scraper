@@ -58,7 +58,7 @@ jobs:
       if: steps.guard.outputs.skip != 'true'
       uses: actions/setup-python@v6
       with:
-        python-version: '3.9'
+        python-version: '3.12'
         cache: 'pip'
     - name: Validate required secrets
       if: steps.guard.outputs.skip != 'true'
