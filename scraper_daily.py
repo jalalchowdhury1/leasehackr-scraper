@@ -4,7 +4,7 @@ Daily Scraper - extracts today's lease deals from leasehackr.com and pushes to a
 - Wipes the sheet fresh each run (keeps headers intact)
 - Writes only today's scraped deals, sorted by score
 - Deduplicates within today's scrape
-- Alert only if any deal scores ≥ 98 (Silent digest; silent direct send as fallback)
+- No alert since 10 Oct 2026 (the Historical run alerts new/cheaper non-truck deals)
 """
 
 import os
@@ -171,13 +171,13 @@ def main():
 
     print(f"\n✅ Daily sheet refreshed with {len(sorted_deals)} deals!")
 
-    # ── 6. Telegram alert (score >= 98 only) ──────────────────────────────
+    # ── 6. No alert (10 Oct 2026) ─────────────────────────────────────────
+    # This alert re-sent every deal >= 98 every night, so the same Tacomas came back
+    # daily. The Historical run (scraper.py pick_alerts) now alerts each car once --
+    # again only if cheaper, never trucks. send_daily_telegram_alert stays for a revert.
     hot_deals = filter_hot_deals(sorted_deals, threshold=TELEGRAM_ALERT_THRESHOLD)
-    print(f"\n[Alert Check] {len(hot_deals)} deal(s) with score ≥ {TELEGRAM_ALERT_THRESHOLD}")
-    if hot_deals:
-        send_daily_telegram_alert(hot_deals)
-    else:
-        print("  No deals met the alert threshold — no Telegram message sent.")
+    print(f"\n[Alert Check] {len(hot_deals)} deal(s) with score ≥ {TELEGRAM_ALERT_THRESHOLD} — "
+          "daily alert retired; new/cheaper deals alert from the Historical run")
 
     print("\n" + "=" * 60)
     print("DAILY SCRAPER — DONE")

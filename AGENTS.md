@@ -377,3 +377,14 @@ public — keep it that way.
 External endpoints: source = `https://pnd.leasehackr.com/`; alerts =
 `https://api.telegram.org/bot<token>/sendMessage`; Sheets via gspread (Google API).
 Repo: `github.com/jalalchowdhury1/leasehackr-scraper` (public).
+
+## Alert preferences (10 Oct 2026)
+
+Jalal: "I keep seeing the same Toyota Tacoma that I have no interest in." Now:
+- **One alert only** — the Historical run (`scraper.py` → `pick_alerts`, digest id `leasenew`).
+  The Daily run still rewrites its tab but no longer alerts (it re-sent every ≥98 deal nightly);
+  `send_daily_telegram_alert` is kept for a revert.
+- **No pickup trucks** (`is_truck`: Tacoma, Tundra, F-150…, Ram make, etc.). Sheets keep them.
+- **Once, again only if cheaper**: a re-listing of the same car (make, model, MSRP, term) alerts
+  only if its effective monthly (monthly + DAS/term) beats every earlier listing in the sheet.
+- Tests: `tests/test_alert_prefs.py`.

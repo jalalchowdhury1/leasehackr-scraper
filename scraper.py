@@ -7,6 +7,7 @@ requests → Lightpanda → scrapling) and uses gspread to write to Google Sheet
 
 import os
 import json
+import re
 import time
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -452,6 +453,64 @@ def filter_hot_deals(new_deals: list, threshold: float = TELEGRAM_ALERT_THRESHOL
     return [deal for deal in new_deals if deal.score >= threshold]
 
 
+# Alert preferences (10 Oct 2026, Jalal): "I keep seeing the same Toyota Tacoma that I
+# have no interest in." Pickup trucks never alert, and a car alerts once -- again only
+# when it comes back CHEAPER. The sheets still get every deal; only the alert filters.
+_TRUCK_MODELS = re.compile(
+    r"\b(tacoma|tundra|f-?150|f-?250|f-?350|super duty|ranger|maverick|silverado|"
+    r"sierra|colorado|canyon|frontier|titan|ridgeline|gladiator|santa cruz|"
+    r"cybertruck|r1t|pickup)\b", re.I)
+_TRUCK_MAKES = {"ram"}
+
+
+def is_truck(deal) -> bool:
+    return (deal.make.strip().lower() in _TRUCK_MAKES
+            or bool(_TRUCK_MODELS.search(f"{deal.make} {deal.model}")))
+
+
+def _num(value) -> Optional[float]:
+    try:
+        return float(str(value).replace('$', '').replace(',', '').strip())
+    except ValueError:
+        return None
+
+
+def _effective_monthly(monthly, das, months) -> Optional[float]:
+    """Monthly + due-at-signing spread over the term (one-pay leases show $0/mo)."""
+    mo, d, n = _num(monthly), _num(das), _num(months)
+    if mo is None or d is None or not n:
+        return None
+    return mo + d / n
+
+
+def _car_key(make, model, msrp, months) -> tuple:
+    return (str(make).strip(), str(model).strip(), _num(msrp), _num(months))
+
+
+def pick_alerts(new_deals: list, existing_rows: list,
+                threshold: float = TELEGRAM_ALERT_THRESHOLD) -> list:
+    """Hot new deals worth a message: not a truck, and cheaper than every earlier
+    listing of the same car (make, model, MSRP, term) -- a re-listing at the same
+    or a higher price is "new" to the sheet but old news to Jalal."""
+    best = {}
+    for row in existing_rows:
+        if len(row) >= 8:
+            key = _car_key(row[0], row[1], row[2], row[4])
+            eff = _effective_monthly(row[6], row[7], row[4])
+            if eff is not None and (key not in best or eff < best[key]):
+                best[key] = eff
+    picks = []
+    for deal in filter_hot_deals(new_deals, threshold):
+        if is_truck(deal):
+            continue
+        key = _car_key(deal.make, deal.model, deal.msrp, deal.months)
+        eff = _effective_monthly(deal.monthly_payment, deal.due_at_signing, deal.months)
+        if key in best and (eff is None or eff >= best[key] - 1):   # $1 = rounding noise
+            continue
+        picks.append(deal)
+    return picks
+
+
 def combine_and_deduplicate(existing_rows: list, new_deals: list) -> list:
     """
     Combine existing rows and new deals, deduplicate, and sort by Score.
@@ -551,8 +610,9 @@ def main():
         print(f"{i}. Score: {score}/100 - {make} {model} - ${monthly}/mo")
 
     # Telegram alert: brand-new deals (first time seen) scoring >= threshold
-    hot_new_deals = filter_hot_deals(new_deals)
-    print(f"\n[Alert Check] {len(hot_new_deals)} new deal(s) scoring ≥ {TELEGRAM_ALERT_THRESHOLD}")
+    hot_new_deals = pick_alerts(new_deals, existing_rows)
+    print(f"\n[Alert Check] {len(hot_new_deals)} new deal(s) scoring ≥ {TELEGRAM_ALERT_THRESHOLD} "
+          f"(of {len(filter_hot_deals(new_deals))} hot; trucks and not-cheaper re-listings skipped)")
     if hot_new_deals:
         send_telegram_alert(hot_new_deals)
     else:
