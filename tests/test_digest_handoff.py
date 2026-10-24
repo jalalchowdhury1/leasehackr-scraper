@@ -57,7 +57,7 @@ def test_daily_goes_to_digest_and_never_messages_the_chat(monkeypatch):
     assert url == 'https://digest.test/api/digest'
     assert kw['params'] == {'k': 'dk'}
     assert kw['json']['id'] == 'leasehackr'
-    assert 'Leasehackr Daily Alert: 1 Deal(s)' in kw['json']['text']
+    assert kw['json']['text'].startswith('🚗 Leasehackr · 1 deal today')
     assert not any('api.telegram.org' in u for u, _ in calls)
 
 
@@ -65,7 +65,7 @@ def test_historical_uses_its_own_id_so_daily_cannot_overwrite_it(monkeypatch):
     calls = _stub(monkeypatch, [_Resp(200, {'ok': True, 'id': 'leasenew'})], FULL_ENV)
     assert scraper.send_telegram_alert([_deal()]) == 'digest'
     assert calls[0][1]['json']['id'] == 'leasenew'
-    assert 'New Deal(s)' in calls[0][1]['json']['text']
+    assert 'new deal' in calls[0][1]['json']['text']
 
 
 def test_collector_refusal_falls_back_to_a_silent_direct_send(monkeypatch):

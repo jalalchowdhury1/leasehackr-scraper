@@ -173,7 +173,8 @@ def deliver_alert(item_id: str, text: str) -> str:
 
 
 def build_new_deals_message(hot_deals: list) -> str:
-    text = f"🆕 Leasehackr: {len(hot_deals)} New Deal(s) Scoring ≥ {TELEGRAM_ALERT_THRESHOLD}! 🆕\n\n"
+    n = len(hot_deals)
+    text = f"🚗 Leasehackr · {n} new deal{'s' if n != 1 else ''}\nscore {TELEGRAM_ALERT_THRESHOLD}+\n\n"
     for deal in hot_deals:
         text += (
             f"🔥 Score: {deal.score}/100\n"

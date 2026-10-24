@@ -89,7 +89,8 @@ def _fmt_money(value) -> str:
 
 
 def build_daily_message(hot_deals: list) -> str:
-    text = f"🚨 Leasehackr Daily Alert: {len(hot_deals)} Deal(s) Score ≥ {TELEGRAM_ALERT_THRESHOLD}!\n\n"
+    n = len(hot_deals)
+    text = f"🚗 Leasehackr · {n} deal{'s' if n != 1 else ''} today\nscore {TELEGRAM_ALERT_THRESHOLD}+\n\n"
     for deal in hot_deals:
         text += (
             f"🔥 Score: {deal.score}/100\n"
